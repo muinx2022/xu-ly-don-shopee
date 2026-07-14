@@ -1,0 +1,187 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:XuLyDonShopee.App.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="1084" d:DesignHeight="820"
+             x:Class="XuLyDonShopee.App.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel">
+
+    <ScrollViewer>
+        <StackPanel MaxWidth="760" HorizontalAlignment="Left" Margin="24,24,32,40">
+
+            <TextBlock Text="Cài đặt" FontSize="19" FontWeight="Bold" LetterSpacing="-0.3"
+                       Foreground="{StaticResource TextInk}" />
+            <TextBlock Text="Tùy chỉnh hành vi xử lý đơn và ứng dụng" FontSize="12"
+                       Foreground="{StaticResource TextMuted}" Margin="0,2,0,24" />
+
+            <!-- ===== XỬ LÝ ĐƠN HÀNG ===== -->
+            <TextBlock Classes="section" Text="XỬ LÝ ĐƠN HÀNG" Margin="0,0,0,12" />
+            <Border Classes="card" Padding="0" ClipToBounds="True" Margin="0,0,0,24">
+                <StackPanel>
+                    <!-- Hàng 1 -->
+                    <Border BorderBrush="{StaticResource Border05}" BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="Auto,14,*,Auto" Margin="22,16">
+                            <Border Grid.Column="0" Width="34" Height="34" CornerRadius="8"
+                                    Background="{StaticResource AccentSoft1}">
+                                <TextBlock Text="🖨" FontSize="16"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock Text="Tự động in hóa đơn" FontSize="13.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text252}" />
+                                <TextBlock Text="In ngay khi đơn được xác nhận" FontSize="12"
+                                           Foreground="{StaticResource TextMuted}" Margin="0,2,0,0" />
+                            </StackPanel>
+                            <ToggleButton Grid.Column="3" Classes="switch" VerticalAlignment="Center"
+                                          IsChecked="{Binding AutoPrint}" />
+                        </Grid>
+                    </Border>
+                    <!-- Hàng 2 -->
+                    <Border BorderBrush="{StaticResource Border05}" BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="Auto,14,*,Auto" Margin="22,16">
+                            <Border Grid.Column="0" Width="34" Height="34" CornerRadius="8"
+                                    Background="{StaticResource AccentSoft1}">
+                                <TextBlock Text="🔔" FontSize="16"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock Text="Thông báo đơn mới" FontSize="13.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text252}" />
+                                <TextBlock Text="Hiện thông báo desktop khi có đơn" FontSize="12"
+                                           Foreground="{StaticResource TextMuted}" Margin="0,2,0,0" />
+                            </StackPanel>
+                            <ToggleButton Grid.Column="3" Classes="switch" VerticalAlignment="Center"
+                                          IsChecked="{Binding NotifyNewOrder}" />
+                        </Grid>
+                    </Border>
+                    <!-- Hàng 3 -->
+                    <Grid ColumnDefinitions="Auto,14,*,Auto" Margin="22,16">
+                        <Border Grid.Column="0" Width="34" Height="34" CornerRadius="8"
+                                Background="{StaticResource AccentSoft1}">
+                            <TextBlock Text="📦" FontSize="16"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock Text="Tự động xác nhận đơn" FontSize="13.5" FontWeight="SemiBold"
+                                       Foreground="{StaticResource Text252}" />
+                            <TextBlock Text="Xác nhận đơn đủ điều kiện không cần thao tác" FontSize="12"
+                                       Foreground="{StaticResource TextMuted}" Margin="0,2,0,0" />
+                        </StackPanel>
+                        <ToggleButton Grid.Column="3" Classes="switch" VerticalAlignment="Center"
+                                      IsChecked="{Binding AutoConfirm}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- ===== TỰ ĐỘNG HÓA ===== -->
+            <TextBlock Classes="section" Text="TỰ ĐỘNG HÓA" Margin="0,0,0,12" />
+            <Border Classes="card" Padding="24,22" Margin="0,0,0,24">
+                <StackPanel Spacing="18">
+                    <!-- Slider chu kỳ quét (tĩnh) -->
+                    <StackPanel>
+                        <TextBlock Classes="fieldLabel" Text="Chu kỳ quét đơn mới" />
+                        <Grid ColumnDefinitions="*,14,78">
+                            <Panel Grid.Column="0" Height="18" VerticalAlignment="Center">
+                                <Border Height="6" CornerRadius="3" Background="#EEEEEE"
+                                        VerticalAlignment="Center" />
+                                <Grid ColumnDefinitions="42*,58*" VerticalAlignment="Center">
+                                    <Border Grid.Column="0" Height="6" CornerRadius="3"
+                                            Background="{StaticResource AccentBrush}" />
+                                    <Border Grid.Column="0" Width="18" Height="18" CornerRadius="9"
+                                            Background="White" BorderBrush="{StaticResource Border012}"
+                                            BorderThickness="1" BoxShadow="0 1 4 0 #33000000"
+                                            HorizontalAlignment="Right" Margin="0,0,-9,0" />
+                                </Grid>
+                            </Panel>
+                            <Border Grid.Column="2" Height="36" CornerRadius="6"
+                                    Background="{StaticResource InputBg}"
+                                    BorderBrush="{StaticResource Border010}" BorderThickness="1">
+                                <TextBlock Text="{Binding ScanIntervalText}" FontSize="13" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text252}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Thư mục lưu hóa đơn (tĩnh) -->
+                    <StackPanel>
+                        <TextBlock Classes="fieldLabel" Text="Thư mục lưu hóa đơn" />
+                        <Grid ColumnDefinitions="*,8,Auto">
+                            <Border Grid.Column="0" Classes="field" Height="38">
+                                <Grid>
+                                    <TextBlock Text="{Binding InvoiceFolderText}"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="13"
+                                               Foreground="{StaticResource Text5A}"
+                                               VerticalAlignment="Center" Margin="12,0" />
+                                    <Border Classes="underline" />
+                                </Grid>
+                            </Border>
+                            <Button Grid.Column="2" Classes="secondary" Content="Chọn…" Height="38" />
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ===== GIAO DIỆN ===== -->
+            <TextBlock Classes="section" Text="GIAO DIỆN" Margin="0,0,0,12" />
+            <Border Classes="card" Padding="24,22">
+                <StackPanel>
+                    <TextBlock Classes="fieldLabel" Text="Chủ đề" Margin="0,0,0,10" />
+                    <Grid ColumnDefinitions="*,10,*,10,*">
+                        <!-- Sáng (được chọn) -->
+                        <Border Grid.Column="0" Height="74" CornerRadius="8"
+                                BorderBrush="{StaticResource AccentBrush}" BorderThickness="2">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                                    <GradientStop Offset="0" Color="#FFFFFF" />
+                                    <GradientStop Offset="1" Color="#F4F5F7" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
+                                <Border Width="26" Height="16" CornerRadius="3" Background="White"
+                                        BorderBrush="#26000000" BorderThickness="1"
+                                        HorizontalAlignment="Center" />
+                                <TextBlock Text="Sáng" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text252}"
+                                           HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <!-- Tối -->
+                        <Border Grid.Column="2" Height="74" CornerRadius="8"
+                                Background="{StaticResource InputBg}"
+                                BorderBrush="{StaticResource Border010}" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
+                                <Border Width="26" Height="16" CornerRadius="3" Background="#2A2F3A"
+                                        HorizontalAlignment="Center" />
+                                <TextBlock Text="Tối" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text7A}"
+                                           HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                        <!-- Theo hệ thống -->
+                        <Border Grid.Column="4" Height="74" CornerRadius="8"
+                                Background="{StaticResource InputBg}"
+                                BorderBrush="{StaticResource Border010}" BorderThickness="1">
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
+                                <Border Width="26" Height="16" CornerRadius="3"
+                                        HorizontalAlignment="Center" ClipToBounds="True">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                                            <GradientStop Offset="0.5" Color="#FFFFFF" />
+                                            <GradientStop Offset="0.5" Color="#2A2F3A" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <TextBlock Text="Theo hệ thống" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Text7A}"
+                                           HorizontalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

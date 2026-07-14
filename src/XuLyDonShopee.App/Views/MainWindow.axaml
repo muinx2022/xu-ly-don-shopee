@@ -1,0 +1,94 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:XuLyDonShopee.App.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1320" d:DesignHeight="860"
+        x:Class="XuLyDonShopee.App.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Width="1320" Height="860"
+        MinWidth="1080" MinHeight="640"
+        FontFamily="{StaticResource UiFont}"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="Xử lý đơn Shopee">
+
+    <Window.Background>
+        <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
+            <GradientStop Offset="0" Color="#F7F8FA" />
+            <GradientStop Offset="1" Color="#F0F2F5" />
+        </LinearGradientBrush>
+    </Window.Background>
+
+    <Grid ColumnDefinitions="236,*">
+
+        <!-- ===== Sidebar ===== -->
+        <Border Grid.Column="0"
+                Background="{StaticResource SidebarBg}"
+                BorderBrush="{StaticResource Border05}"
+                BorderThickness="0,0,1,0"
+                Padding="8,8,8,12">
+            <DockPanel>
+
+                <!-- Header -->
+                <StackPanel DockPanel.Dock="Top" Margin="8,8,4,10">
+                    <TextBlock Text="Xử lý đơn Shopee"
+                               FontSize="15" FontWeight="Bold"
+                               Foreground="{StaticResource TextInk}" />
+                    <TextBlock Text="Quản lý tài khoản bán hàng"
+                               FontSize="11.5" Foreground="{StaticResource TextMuted}"
+                               Margin="0,2,0,0" />
+                </StackPanel>
+
+                <!-- Footer card -->
+                <Border DockPanel.Dock="Bottom"
+                        Background="{StaticResource SidebarFooterBg}"
+                        BorderBrush="{StaticResource Border05}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="10,12"
+                        Margin="4,8,4,4">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border Width="30" Height="30" CornerRadius="15">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                                    <GradientStop Offset="0" Color="#FF6B3D" />
+                                    <GradientStop Offset="1" Color="#EE4D2D" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Shop Manager" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="#2A2A2A" />
+                            <TextBlock Text="1 tài khoản" FontSize="10.5"
+                                       Foreground="{StaticResource TextMuted}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Nav -->
+                <ListBox Classes="nav"
+                         Margin="0,4,0,0"
+                         ItemsSource="{Binding NavItems}"
+                         SelectedIndex="{Binding SelectedNavIndex}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:NavItem">
+                            <Grid>
+                                <Border Classes="nav-pill" />
+                                <StackPanel Orientation="Horizontal" Spacing="12"
+                                            Margin="12,0" VerticalAlignment="Center">
+                                    <TextBlock Classes="nav-icon" Text="{Binding Icon}" />
+                                    <TextBlock Classes="nav-label" Text="{Binding Label}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+            </DockPanel>
+        </Border>
+
+        <!-- ===== Nội dung ===== -->
+        <ContentControl Grid.Column="1"
+                        Content="{Binding CurrentViewModel}" />
+    </Grid>
+</Window>

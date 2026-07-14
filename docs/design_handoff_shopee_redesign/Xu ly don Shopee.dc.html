@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #d9dde3; font-family: "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 8px; border: 4px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.30); border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</helmet>
+
+<div style="width:1400px; height:902px; display:flex; flex-direction:column; border-radius:8px; overflow:hidden; box-shadow:0 30px 80px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08); background:linear-gradient(180deg,#f7f8fa 0%,#f0f2f5 100%); font-family:'Segoe UI Variable','Segoe UI',Inter,system-ui,sans-serif;">
+
+  <!-- Title bar -->
+  <div style="height:40px; flex:none; display:flex; align-items:center; padding-left:14px; background:rgba(255,255,255,0.55); backdrop-filter:blur(20px); border-bottom:1px solid rgba(0,0,0,0.06);">
+    <div style="width:20px; height:20px; border-radius:5px; background:linear-gradient(135deg,#ff6b3d,#ee4d2d); display:flex; align-items:center; justify-content:center; margin-right:10px; box-shadow:0 1px 3px rgba(238,77,45,0.4);">
+      <div style="width:9px; height:9px; border:2px solid #fff; border-radius:50%;"></div>
+    </div>
+    <span style="font-size:12.5px; font-weight:600; color:#3a3a3a; letter-spacing:0.1px;">Xử lý đơn Shopee</span>
+    <div style="flex:1;"></div>
+    <div style="display:flex; align-items:stretch; height:40px;">
+      <div style="width:46px; display:flex; align-items:center; justify-content:center; color:#5a5a5a;" style-hover="background:rgba(0,0,0,0.05);"><div style="width:11px; height:1px; background:currentColor;"></div></div>
+      <div style="width:46px; display:flex; align-items:center; justify-content:center; color:#5a5a5a;" style-hover="background:rgba(0,0,0,0.05);"><div style="width:10px; height:10px; border:1.4px solid currentColor; border-radius:2px;"></div></div>
+      <div style="width:46px; display:flex; align-items:center; justify-content:center; color:#5a5a5a; font-size:16px; font-weight:300;" style-hover="background:#e81123; color:#fff;">✕</div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div style="flex:1; display:flex; min-height:0;">
+
+    <!-- Sidebar -->
+    <div style="width:236px; flex:none; padding:8px 8px 12px; display:flex; flex-direction:column; background:rgba(255,255,255,0.35); border-right:1px solid rgba(0,0,0,0.05);">
+      <div style="padding:16px 12px 18px;">
+        <div style="font-size:15px; font-weight:700; color:#1c1c1c; letter-spacing:-0.2px;">Xử lý đơn Shopee</div>
+        <div style="font-size:11.5px; color:#8a8a8a; margin-top:2px;">Quản lý tài khoản bán hàng</div>
+      </div>
+
+      <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="3">
+        <div onClick="{{ item.onClick }}" style="{{ item.rowStyle }}">
+          <div style="{{ item.pillStyle }}"></div>
+          <div style="{{ item.iconStyle }}">{{ item.icon }}</div>
+          <span style="{{ item.labelStyle }}">{{ item.label }}</span>
+        </div>
+      </sc-for>
+
+      <div style="flex:1;"></div>
+      <div style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:6px; background:rgba(255,255,255,0.6); border:1px solid rgba(0,0,0,0.05);">
+        <div style="width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,#ff6b3d,#ee4d2d); flex:none;"></div>
+        <div style="min-width:0;">
+          <div style="font-size:12px; font-weight:600; color:#2a2a2a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Shop Manager</div>
+          <div style="font-size:10.5px; color:#8a8a8a;">1 tài khoản</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <sc-if value="{{ isAccounts }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:1; display:flex; min-width:0;">
+
+      <!-- Account list column -->
+      <div style="width:340px; flex:none; display:flex; flex-direction:column; padding:24px 20px 18px; border-right:1px solid rgba(0,0,0,0.06); min-height:0;">
+        <div style="font-size:19px; font-weight:700; color:#1c1c1c; letter-spacing:-0.3px; margin-bottom:16px;">Danh sách tài khoản</div>
+
+        <div style="position:relative; margin-bottom:14px;">
+          <span style="position:absolute; left:12px; top:50%; transform:translateY(-50%); color:#9a9a9a; font-size:14px;">⌕</span>
+          <div style="height:36px; padding:0 12px 0 32px; display:flex; align-items:center; background:#fff; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid rgba(0,0,0,0.22); border-radius:6px; font-size:13px; color:#9a9a9a;">Tìm theo email / ghi chú…</div>
+        </div>
+
+        <div style="flex:1; overflow-y:auto; min-height:0; display:flex; flex-direction:column; gap:8px; margin:0 -4px; padding:0 4px;">
+          <sc-for list="{{ accounts }}" as="acc" hint-placeholder-count="1">
+            <div onClick="{{ acc.onClick }}" style="{{ acc.cardStyle }}">
+              <div style="{{ acc.avatarStyle }}">{{ acc.initial }}</div>
+              <div style="min-width:0; flex:1;">
+                <div style="font-size:13px; font-weight:600; color:#232323; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ acc.email }}</div>
+                <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+                  <span style="{{ acc.dotStyle }}"></span>
+                  <span style="font-size:11px; color:#7a7a7a;">{{ acc.status }}</span>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex; gap:8px; margin-top:14px;">
+          <div style="flex:1; height:38px; display:flex; align-items:center; justify-content:center; gap:6px; background:#ee4d2d; color:#fff; font-size:13px; font-weight:600; border-radius:6px; box-shadow:0 1px 2px rgba(238,77,45,0.4); cursor:default;" style-hover="background:#e0431f;">
+            <span style="font-size:15px; font-weight:400; line-height:1;">+</span> Thêm tài khoản
+          </div>
+          <div style="width:38px; height:38px; display:flex; align-items:center; justify-content:center; background:#fff; border:1px solid rgba(0,0,0,0.12); border-radius:6px; color:#c0392b; font-size:14px;" style-hover="background:#fdecea; border-color:#f5b5ad;">🗑</div>
+        </div>
+      </div>
+
+      <!-- Detail column -->
+      <div style="flex:1; overflow-y:auto; min-width:0;">
+        <div style="max-width:720px; padding:24px 32px 32px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:22px;">
+            <div>
+              <div style="font-size:19px; font-weight:700; color:#1c1c1c; letter-spacing:-0.3px;">Chi tiết tài khoản</div>
+              <div style="font-size:12px; color:#8a8a8a; margin-top:2px;">Thông tin đăng nhập và trạng thái</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:7px; padding:6px 12px; background:#fff4e5; border:1px solid #ffd9a8; border-radius:20px;">
+              <span style="width:7px; height:7px; border-radius:50%; background:#f5a623;"></span>
+              <span style="font-size:12px; font-weight:600; color:#b8720a;">Chưa kiểm tra</span>
+            </div>
+          </div>
+
+          <!-- Card: credentials -->
+          <div style="background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:10px; padding:22px 24px; box-shadow:0 1px 3px rgba(0,0,0,0.04); margin-bottom:16px;">
+            <div style="font-size:11px; font-weight:700; color:#ee4d2d; letter-spacing:0.6px; text-transform:uppercase; margin-bottom:16px;">Thông tin đăng nhập</div>
+
+            <div style="margin-bottom:16px;">
+              <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Email (dùng để đăng nhập)</label>
+              <div style="height:38px; padding:0 12px; display:flex; align-items:center; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid #ee4d2d; border-radius:6px; font-size:13.5px; color:#1e1e1e;">witkoxatlinpbgld@hotmail.com</div>
+            </div>
+
+            <div style="display:flex; gap:14px;">
+              <div style="flex:1;">
+                <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Mật khẩu</label>
+                <div style="height:38px; padding:0 6px 0 12px; display:flex; align-items:center; gap:8px; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid rgba(0,0,0,0.22); border-radius:6px;">
+                  <span style="flex:1; font-size:14px; color:#1e1e1e; letter-spacing:1px; white-space:nowrap; overflow:hidden;">{{ pwDisplay }}</span>
+                  <div onClick="{{ togglePw }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border-radius:5px; color:#7a7a7a; font-size:14px;" style-hover="background:rgba(0,0,0,0.05);">{{ pwIcon }}</div>
+                </div>
+              </div>
+              <div style="flex:1;">
+                <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Số điện thoại</label>
+                <div style="height:38px; padding:0 12px; display:flex; align-items:center; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid rgba(0,0,0,0.22); border-radius:6px; font-size:13.5px; color:#a5a5a5;">Tùy chọn</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card: cookie -->
+          <div style="background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:10px; padding:22px 24px; box-shadow:0 1px 3px rgba(0,0,0,0.04); margin-bottom:16px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+              <div style="font-size:11px; font-weight:700; color:#ee4d2d; letter-spacing:0.6px; text-transform:uppercase;">Cookie đăng nhập</div>
+              <span style="font-size:11px; color:#9a9a9a; font-family:'JetBrains Mono',monospace;">JSON · 1.2 KB</span>
+            </div>
+            <div style="background:#1e2430; border-radius:8px; padding:14px 16px; font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.7; color:#cbd5e1; max-height:150px; overflow:auto; white-space:pre;"><span style="color:#7dd3fc;">[</span>
+  <span style="color:#7dd3fc;">{</span>
+    <span style="color:#a5b4fc;">"Name"</span>: <span style="color:#86efac;">"SPC_CDS"</span>,
+    <span style="color:#a5b4fc;">"Value"</span>: <span style="color:#86efac;">"cc7af58a-8a30-42db-882d-5d7418aa35f9"</span>,
+    <span style="color:#a5b4fc;">"Domain"</span>: <span style="color:#86efac;">"banhang.shopee.vn"</span>,
+    <span style="color:#a5b4fc;">"Path"</span>: <span style="color:#86efac;">"/"</span>
+  <span style="color:#7dd3fc;">}</span>
+<span style="color:#7dd3fc;">]</span></div>
+          </div>
+
+          <!-- Card: meta -->
+          <div style="background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:10px; padding:22px 24px; box-shadow:0 1px 3px rgba(0,0,0,0.04); margin-bottom:22px;">
+            <div style="display:flex; gap:14px; margin-bottom:16px;">
+              <div style="flex:1;">
+                <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Ghi chú</label>
+                <div style="height:38px; padding:0 12px; display:flex; align-items:center; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid rgba(0,0,0,0.22); border-radius:6px; font-size:13.5px; color:#a5a5a5;">Tùy chọn</div>
+              </div>
+              <div style="flex:1;">
+                <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Trạng thái</label>
+                <div style="height:38px; padding:0 10px 0 12px; display:flex; align-items:center; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid rgba(0,0,0,0.22); border-radius:6px; font-size:13.5px; color:#1e1e1e;">
+                  <span style="flex:1;">Chưa kiểm tra</span>
+                  <span style="color:#8a8a8a; font-size:11px;">▾</span>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex; gap:28px; font-size:12px; color:#9a9a9a;">
+              <div>Ngày tạo: <span style="color:#5a5a5a; font-weight:500;">13/07/2026 21:43</span></div>
+              <div>Ngày sửa: <span style="color:#5a5a5a; font-weight:500;">14/07/2026 09:59</span></div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="height:40px; padding:0 22px; display:flex; align-items:center; background:#ee4d2d; color:#fff; font-size:13.5px; font-weight:600; border-radius:6px; box-shadow:0 1px 2px rgba(238,77,45,0.4);" style-hover="background:#e0431f;">Lưu thay đổi</div>
+            <div style="height:40px; padding:0 22px; display:flex; align-items:center; background:#fff; border:1px solid rgba(0,0,0,0.14); color:#4a4a4a; font-size:13.5px; font-weight:600; border-radius:6px;" style-hover="background:#f5f5f5;">Hủy</div>
+            <div style="flex:1;"></div>
+            <div style="height:40px; padding:0 20px; display:flex; align-items:center; gap:8px; background:#fff; border:1px solid #ffd0c4; color:#ee4d2d; font-size:13.5px; font-weight:600; border-radius:6px;" style-hover="background:#fff4f1;">Mở trang bán hàng <span style="font-size:12px;">↗</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- Settings screen -->
+    <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1; overflow-y:auto; min-width:0;">
+      <div style="max-width:760px; padding:24px 32px 40px;">
+        <div style="font-size:19px; font-weight:700; color:#1c1c1c; letter-spacing:-0.3px;">Cài đặt</div>
+        <div style="font-size:12px; color:#8a8a8a; margin-top:2px; margin-bottom:24px;">Tùy chỉnh hành vi xử lý đơn và ứng dụng</div>
+
+        <div style="font-size:11px; font-weight:700; color:#ee4d2d; letter-spacing:0.6px; text-transform:uppercase; margin-bottom:12px;">Xử lý đơn hàng</div>
+        <div style="background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,0.04); margin-bottom:24px; overflow:hidden;">
+          <sc-for list="{{ toggleRows }}" as="row" hint-placeholder-count="3">
+            <div style="{{ row.rowStyle }}">
+              <div style="width:34px; height:34px; flex:none; border-radius:8px; background:#fff2ee; display:flex; align-items:center; justify-content:center; font-size:16px;">{{ row.icon }}</div>
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:13.5px; font-weight:600; color:#252525;">{{ row.title }}</div>
+                <div style="font-size:12px; color:#8a8a8a; margin-top:2px;">{{ row.desc }}</div>
+              </div>
+              <div style="{{ row.trackStyle }}"><div style="{{ row.knobStyle }}"></div></div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="font-size:11px; font-weight:700; color:#ee4d2d; letter-spacing:0.6px; text-transform:uppercase; margin-bottom:12px;">Tự động hóa</div>
+        <div style="background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,0.04); margin-bottom:24px; padding:22px 24px;">
+          <div style="margin-bottom:18px;">
+            <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Chu kỳ quét đơn mới</label>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <div style="flex:1; height:6px; border-radius:3px; background:#eee; position:relative;">
+                <div style="position:absolute; left:0; top:0; height:6px; width:42%; border-radius:3px; background:#ee4d2d;"></div>
+                <div style="position:absolute; left:42%; top:50%; transform:translate(-50%,-50%); width:18px; height:18px; border-radius:50%; background:#fff; border:1px solid rgba(0,0,0,0.12); box-shadow:0 1px 4px rgba(0,0,0,0.2);"></div>
+              </div>
+              <div style="width:78px; height:36px; display:flex; align-items:center; justify-content:center; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-radius:6px; font-size:13px; font-weight:600; color:#252525;">30 giây</div>
+            </div>
+          </div>
+          <div>
+            <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:6px;">Thư mục lưu hóa đơn</label>
+            <div style="display:flex; gap:8px;">
+              <div style="flex:1; height:38px; padding:0 12px; display:flex; align-items:center; background:#fbfbfb; border:1px solid rgba(0,0,0,0.10); border-bottom:2px solid rgba(0,0,0,0.22); border-radius:6px; font-size:13px; color:#5a5a5a; font-family:'JetBrains Mono',monospace;">D:\Shopee\HoaDon\2026</div>
+              <div style="height:38px; padding:0 16px; display:flex; align-items:center; background:#fff; border:1px solid rgba(0,0,0,0.14); color:#4a4a4a; font-size:13px; font-weight:600; border-radius:6px;" style-hover="background:#f5f5f5;">Chọn…</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size:11px; font-weight:700; color:#ee4d2d; letter-spacing:0.6px; text-transform:uppercase; margin-bottom:12px;">Giao diện</div>
+        <div style="background:#fff; border:1px solid rgba(0,0,0,0.07); border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,0.04); padding:22px 24px;">
+          <label style="display:block; font-size:12.5px; font-weight:600; color:#4a4a4a; margin-bottom:10px;">Chủ đề</label>
+          <div style="display:flex; gap:10px;">
+            <div style="flex:1; height:74px; border-radius:8px; border:2px solid #ee4d2d; background:linear-gradient(135deg,#fff,#f4f5f7); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; position:relative;">
+              <div style="width:26px; height:16px; border-radius:3px; background:#fff; border:1px solid rgba(0,0,0,0.15);"></div>
+              <span style="font-size:12px; font-weight:600; color:#252525;">Sáng</span>
+            </div>
+            <div style="flex:1; height:74px; border-radius:8px; border:1px solid rgba(0,0,0,0.10); background:#fbfbfb; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;">
+              <div style="width:26px; height:16px; border-radius:3px; background:#2a2f3a;"></div>
+              <span style="font-size:12px; font-weight:600; color:#7a7a7a;">Tối</span>
+            </div>
+            <div style="flex:1; height:74px; border-radius:8px; border:1px solid rgba(0,0,0,0.10); background:#fbfbfb; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;">
+              <div style="width:26px; height:16px; border-radius:3px; background:linear-gradient(90deg,#fff 50%,#2a2f3a 50%);"></div>
+              <span style="font-size:12px; font-weight:600; color:#7a7a7a;">Theo hệ thống</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { tab: "accounts", showPw: false };
+
+  renderVals() {
+    const tab = this.state.tab;
+    const setTab = (t) => this.setState({ tab: t });
+
+    const nav = [
+      { key: "accounts", label: "Tài khoản", icon: "◵" },
+      { key: "proxy", label: "Proxy", icon: "⇄" },
+      { key: "settings", label: "Cài đặt", icon: "⚙" },
+    ];
+    const navItems = nav.map(n => {
+      const active = n.key === tab;
+      return {
+        label: n.label,
+        icon: n.icon,
+        onClick: () => setTab(n.key),
+        rowStyle: `position:relative; display:flex; align-items:center; gap:12px; height:40px; padding:0 12px; margin:2px 0; border-radius:6px; cursor:default; background:${active ? "rgba(238,77,45,0.10)" : "transparent"};`,
+        pillStyle: `position:absolute; left:0; top:50%; transform:translateY(-50%); width:3px; height:${active ? 18 : 0}px; border-radius:2px; background:#ee4d2d; transition:height .15s;`,
+        iconStyle: `width:20px; text-align:center; font-size:15px; color:${active ? "#ee4d2d" : "#6a6a6a"};`,
+        labelStyle: `font-size:13.5px; font-weight:${active ? 600 : 500}; color:${active ? "#c0341c" : "#3a3a3a"};`,
+      };
+    });
+
+    const accounts = [{
+      email: "witkoxatlinpbgld@hotmail.com",
+      status: "Chưa kiểm tra",
+      initial: "W",
+      selected: true,
+    }].map(a => ({
+      ...a,
+      onClick: () => {},
+      cardStyle: `display:flex; align-items:center; gap:11px; padding:11px 12px; border-radius:8px; cursor:default; background:${a.selected ? "#fff" : "transparent"}; border:1px solid ${a.selected ? "rgba(238,77,45,0.35)" : "transparent"}; box-shadow:${a.selected ? "0 1px 4px rgba(238,77,45,0.12)" : "none"};`,
+      avatarStyle: `width:34px; height:34px; flex:none; border-radius:8px; background:linear-gradient(135deg,#ff8a5c,#ee4d2d); color:#fff; font-size:14px; font-weight:700; display:flex; align-items:center; justify-content:center;`,
+      dotStyle: `width:6px; height:6px; border-radius:50%; background:#f5a623; display:inline-block;`,
+    }));
+
+    const toggles = [
+      { icon: "🖨", title: "Tự động in hóa đơn", desc: "In ngay khi đơn được xác nhận", on: true },
+      { icon: "🔔", title: "Thông báo đơn mới", desc: "Hiện thông báo desktop khi có đơn", on: true },
+      { icon: "📦", title: "Tự động xác nhận đơn", desc: "Xác nhận đơn đủ điều kiện không cần thao tác", on: false },
+    ];
+    const toggleRows = toggles.map((t, i) => ({
+      icon: t.icon, title: t.title, desc: t.desc,
+      rowStyle: `display:flex; align-items:center; gap:14px; padding:16px 22px; ${i < toggles.length - 1 ? "border-bottom:1px solid rgba(0,0,0,0.05);" : ""}`,
+      trackStyle: `width:42px; height:24px; flex:none; border-radius:12px; padding:2px; display:flex; align-items:center; background:${t.on ? "#ee4d2d" : "#d4d4d4"}; justify-content:${t.on ? "flex-end" : "flex-start"};`,
+      knobStyle: `width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.3);`,
+    }));
+
+    return {
+      navItems,
+      accounts,
+      toggleRows,
+      isAccounts: tab === "accounts" || tab === "proxy",
+      isSettings: tab === "settings",
+      pwDisplay: this.state.showPw ? "Shopee@2026!" : "••••••••••••",
+      pwIcon: this.state.showPw ? "🙈" : "👁",
+      togglePw: () => this.setState(s => ({ showPw: !s.showPw })),
+    };
+  }
+}
+</script>
+</body>
+</html>

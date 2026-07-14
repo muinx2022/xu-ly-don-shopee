@@ -1,0 +1,280 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:XuLyDonShopee.App.ViewModels"
+             xmlns:models="using:XuLyDonShopee.Core.Models"
+             mc:Ignorable="d" d:DesignWidth="1084" d:DesignHeight="820"
+             x:Class="XuLyDonShopee.App.Views.AccountsView"
+             x:DataType="vm:AccountsViewModel">
+
+    <Grid ColumnDefinitions="340,*">
+
+        <!-- ================= Cột trái: danh sách ================= -->
+        <Border Grid.Column="0"
+                BorderBrush="{StaticResource Border06}"
+                BorderThickness="0,0,1,0">
+            <DockPanel Margin="24,20,20,18">
+
+                <TextBlock DockPanel.Dock="Top" Text="Danh sách tài khoản"
+                           FontSize="19" FontWeight="Bold" LetterSpacing="-0.3"
+                           Foreground="{StaticResource TextInk}"
+                           Margin="0,0,0,16" />
+
+                <!-- Ô tìm kiếm -->
+                <Border DockPanel.Dock="Top" Classes="field" Height="36" Margin="0,0,0,14">
+                    <Grid ColumnDefinitions="Auto,*">
+                        <TextBlock Grid.Column="0" Text="⌕" FontSize="14"
+                                   Foreground="{StaticResource Text9A}"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" />
+                        <TextBox Grid.Column="1" Classes="bare" Margin="8,0,12,0"
+                                 Text="{Binding SearchText}"
+                                 Watermark="Tìm theo email / ghi chú…" />
+                        <Border Classes="underline" Grid.ColumnSpan="2" />
+                    </Grid>
+                </Border>
+
+                <!-- Hàng nút dưới -->
+                <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto" Margin="0,14,0,0">
+                    <Button Grid.Column="0" Classes="accent" Height="38"
+                            HorizontalAlignment="Stretch"
+                            Command="{Binding AddCommand}" Content="+ Thêm tài khoản" />
+                    <Button Grid.Column="1" Classes="iconDanger" Margin="8,0,0,0"
+                            Content="🗑" Command="{Binding DeleteCommand}"
+                            IsEnabled="{Binding SelectedAccount, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                </Grid>
+
+                <!-- Danh sách tài khoản -->
+                <ListBox Classes="acct"
+                         ItemsSource="{Binding Accounts}"
+                         SelectedItem="{Binding SelectedAccount}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:Account">
+                            <Border Classes="acct-card">
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <Border Grid.Column="0" Width="34" Height="34" CornerRadius="8"
+                                            Margin="0,0,11,0">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                                                <GradientStop Offset="0" Color="#FF8A5C" />
+                                                <GradientStop Offset="1" Color="#EE4D2D" />
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                        <TextBlock Text="{Binding Email, Converter={StaticResource Initial}}"
+                                                   Foreground="White" FontSize="14" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                                        <TextBlock Text="{Binding Email}" FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource Text232}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Border Width="6" Height="6" CornerRadius="3"
+                                                    VerticalAlignment="Center"
+                                                    Background="{Binding Status, Converter={StaticResource StatusColor}}" />
+                                            <TextBlock Text="{Binding Status, Converter={StaticResource VnEnum}}"
+                                                       FontSize="11" Foreground="{StaticResource Text7A}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- ================= Cột phải: chi tiết ================= -->
+        <Grid Grid.Column="1">
+
+            <!-- Placeholder khi chưa chọn -->
+            <TextBlock Text="Chọn một tài khoản hoặc bấm + Thêm tài khoản"
+                       Foreground="{StaticResource Text9A}" FontSize="14"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsVisible="{Binding ShowPlaceholder}" />
+
+            <!-- Khối chi tiết -->
+            <ScrollViewer IsVisible="{Binding IsEditing}">
+                <StackPanel MaxWidth="720" HorizontalAlignment="Left"
+                            Margin="24,24,32,32">
+
+                    <!-- Header hàng -->
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,22">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Chi tiết tài khoản" FontSize="19" FontWeight="Bold"
+                                       LetterSpacing="-0.3" Foreground="{StaticResource TextInk}" />
+                            <TextBlock Text="Thông tin đăng nhập và trạng thái" FontSize="12"
+                                       Foreground="{StaticResource TextMuted}" Margin="0,2,0,0" />
+                        </StackPanel>
+
+                        <!-- Badge pill trạng thái -->
+                        <Border Grid.Column="1" CornerRadius="20" Padding="12,6"
+                                VerticalAlignment="Center"
+                                Background="{Binding EditStatus, Converter={StaticResource StatusPill}, ConverterParameter=bg}"
+                                BorderThickness="1"
+                                BorderBrush="{Binding EditStatus, Converter={StaticResource StatusPill}, ConverterParameter=border}">
+                            <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                <Border Width="7" Height="7" CornerRadius="4" VerticalAlignment="Center"
+                                        Background="{Binding EditStatus, Converter={StaticResource StatusColor}}" />
+                                <TextBlock Text="{Binding EditStatus, Converter={StaticResource VnEnum}}"
+                                           FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{Binding EditStatus, Converter={StaticResource StatusPill}, ConverterParameter=text}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- Card 1: Thông tin đăng nhập -->
+                    <Border Classes="card" Padding="24,22" Margin="0,0,0,16">
+                        <StackPanel Spacing="16">
+                            <TextBlock Classes="section" Text="THÔNG TIN ĐĂNG NHẬP" />
+
+                            <!-- Email -->
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="Email (dùng để đăng nhập)" />
+                                <Border Classes="field" Height="38">
+                                    <Grid>
+                                        <TextBox Classes="bare" Margin="12,0"
+                                                 Text="{Binding EditEmail}"
+                                                 Watermark="Email hoặc tên đăng nhập" />
+                                        <Border Classes="underline" />
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+
+                            <!-- Mật khẩu + SĐT -->
+                            <Grid ColumnDefinitions="*,14,*">
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Classes="fieldLabel" Text="Mật khẩu" />
+                                    <Border Classes="field" Height="38">
+                                        <Grid ColumnDefinitions="*,Auto">
+                                            <TextBox Grid.Column="0" Classes="bare" Margin="12,0,0,0"
+                                                     Text="{Binding EditPassword}"
+                                                     PasswordChar="●"
+                                                     RevealPassword="{Binding ShowPassword}" />
+                                            <Button Grid.Column="1" Classes="ghostIcon" Margin="4,0,5,0"
+                                                    Command="{Binding ToggleShowPasswordCommand}"
+                                                    ToolTip.Tip="Hiện/ẩn mật khẩu">
+                                                <Panel>
+                                                    <TextBlock Text="👁" FontSize="14"
+                                                               IsVisible="{Binding !ShowPassword}" />
+                                                    <TextBlock Text="🙈" FontSize="14"
+                                                               IsVisible="{Binding ShowPassword}" />
+                                                </Panel>
+                                            </Button>
+                                            <Border Classes="underline" Grid.ColumnSpan="2" />
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Classes="fieldLabel" Text="Số điện thoại" />
+                                    <Border Classes="field" Height="38">
+                                        <Grid>
+                                            <TextBox Classes="bare" Margin="12,0"
+                                                     Text="{Binding EditPhone}"
+                                                     Watermark="Tùy chọn" />
+                                            <Border Classes="underline" />
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Card 2: Cookie đăng nhập -->
+                    <Border Classes="card" Padding="24,22" Margin="0,0,0,16">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Classes="section" Text="COOKIE ĐĂNG NHẬP"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Text="{Binding CookieSizeText}"
+                                           FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                           Foreground="{StaticResource Text9A}"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                            <Border Background="{StaticResource CodeBg}" CornerRadius="8"
+                                    Padding="16,14" MaxHeight="150">
+                                <TextBox Classes="bare"
+                                         Text="{Binding EditCookie}"
+                                         AcceptsReturn="True" TextWrapping="NoWrap"
+                                         FontFamily="{StaticResource MonoFont}" FontSize="12"
+                                         Foreground="{StaticResource CodeText}"
+                                         CaretBrush="White"
+                                         VerticalContentAlignment="Top"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                         Watermark="Chưa có cookie — mở trang bán hàng để tự lưu." />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Card 3: Ghi chú + Trạng thái + Ngày -->
+                    <Border Classes="card" Padding="24,22" Margin="0,0,0,22">
+                        <StackPanel Spacing="16">
+                            <Grid ColumnDefinitions="*,14,*">
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Classes="fieldLabel" Text="Ghi chú" />
+                                    <Border Classes="field" Height="38">
+                                        <Grid>
+                                            <TextBox Classes="bare" Margin="12,0"
+                                                     Text="{Binding EditNote}"
+                                                     Watermark="Tùy chọn" />
+                                            <Border Classes="underline" />
+                                        </Grid>
+                                    </Border>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Classes="fieldLabel" Text="Trạng thái" />
+                                    <ComboBox Classes="field" HorizontalAlignment="Stretch"
+                                              ItemsSource="{x:Static vm:AccountsViewModel.StatusOptions}"
+                                              SelectedItem="{Binding EditStatus}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="models:AccountStatus">
+                                                <TextBlock Text="{Binding Converter={StaticResource VnEnum}}" />
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Spacing="28">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Ngày tạo: " FontSize="12"
+                                               Foreground="{StaticResource Text9A}" />
+                                    <TextBlock Text="{Binding CreatedAtText}" FontSize="12"
+                                               FontWeight="Medium" Foreground="{StaticResource Text5A}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Ngày sửa: " FontSize="12"
+                                               Foreground="{StaticResource Text9A}" />
+                                    <TextBlock Text="{Binding UpdatedAtText}" FontSize="12"
+                                               FontWeight="Medium" Foreground="{StaticResource Text5A}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Thông báo -->
+                    <TextBlock Text="{Binding ErrorMessage}" Foreground="#C62828"
+                               TextWrapping="Wrap" Margin="0,0,0,10"
+                               IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Text="{Binding BusyStatus}" Foreground="#2E7D32"
+                               TextWrapping="Wrap" Margin="0,0,0,10"
+                               IsVisible="{Binding BusyStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                    <!-- Hàng nút hành động -->
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                        <Button Grid.Column="0" Classes="accent" Content="Lưu thay đổi"
+                                Command="{Binding SaveCommand}" />
+                        <Button Grid.Column="1" Classes="secondary" Content="Hủy" Margin="10,0,0,0"
+                                Command="{Binding CancelCommand}" />
+                        <Button Grid.Column="3" Classes="accentOutline" Content="Mở trang bán hàng ↗"
+                                Command="{Binding OpenSellerCommand}"
+                                IsEnabled="{Binding CanOpenSeller}"
+                                ToolTip.Tip="Mở Shopee Seller để đăng nhập và lưu cookie vào tài khoản này" />
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>
