@@ -9,7 +9,9 @@
              x:Class="XuLyDonShopee.App.Views.AccountsView"
              x:DataType="vm:AccountsViewModel">
 
-    <Grid ColumnDefinitions="340,*,360">
+    <!-- Cột chi tiết CỐ ĐỊNH 780 (đủ chứa form StackPanel Width=720 + lề 24/32) để KHÔNG bị cột log chèn
+         lên hàng nút hành động; cột log lấy phần còn lại (*) và co lại trên cửa sổ hẹp thay vì đè form. -->
+    <Grid ColumnDefinitions="340,780,*">
 
         <!-- ================= Cột trái: danh sách ================= -->
         <Border Grid.Column="0"
