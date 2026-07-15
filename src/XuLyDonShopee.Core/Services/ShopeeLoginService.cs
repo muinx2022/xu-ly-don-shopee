@@ -722,6 +722,14 @@ public class ShopeeLoginService
                     return null;
                 }
 
+                // Gate: CHƯA đăng nhập → KHÔNG điều hướng. Goto lúc này phá form đăng nhập/captcha đang dở
+                // y hệt reload (xem ghi chú trong ReadToShipCountAsync), và "gõ nửa chừng rồi nhảy trang"
+                // là dấu hiệu máy móc lộ liễu. Trả null ngay — tầng App báo "có thể chưa đăng nhập xong".
+                if (!ShopeeLoginCookies.IsLoggedIn(await CaptureCookiesJsonAsync().ConfigureAwait(false)))
+                {
+                    return null;
+                }
+
                 // Random nội bộ (app dùng ngẫu nhiên thật, đồng bộ style các thao tác kiểu người).
                 var rng = new Random();
 

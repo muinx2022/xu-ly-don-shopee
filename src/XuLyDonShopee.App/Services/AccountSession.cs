@@ -272,6 +272,13 @@ public partial class AccountSession : ObservableObject, IAccountSession
                 return true;
             }
 
+            // Bị hủy giữa chừng (người dùng bấm Dừng): Core nuốt OperationCanceledException và trả null —
+            // KHÔNG đè thông báo "Đang dừng..." bằng câu báo lỗi gây hiểu lầm.
+            if (tok.IsCancellationRequested)
+            {
+                return false;
+            }
+
             // Không đọc được → GIỮ nguyên số cũ (KHÔNG đổi ToShipCount).
             StatusText = "Không đọc được số đơn — có thể chưa đăng nhập xong, kiểm tra cửa sổ Brave.";
             return false;
@@ -417,7 +424,20 @@ public partial class AccountSession : ObservableObject, IAccountSession
                     // Đang điều hướng xử lý đơn (_navigating) → BỎ QUA nhịp này (reload sẽ phá thao tác giữa chừng).
                     if (!_navigating && DateTime.UtcNow >= nextOrderCheck)
                     {
-                        var count = await session.ReadToShipCountAsync(reload: !firstOrderCheck, ct).ConfigureAwait(false);
+                        // GIỮ cờ _navigating suốt lượt đọc (có thể kéo dài ~38s: reload 30s + poll 8s) để
+                        // loại trừ HAI CHIỀU với nút Kiểm tra / Xử lý đơn — không cho Goto/click tay chạy
+                        // chồng lên lượt reload đang bay trên cùng trang (hai bên cùng fail ảo).
+                        _navigating = true;
+                        int? count;
+                        try
+                        {
+                            count = await session.ReadToShipCountAsync(reload: !firstOrderCheck, ct).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            _navigating = false;
+                        }
+
                         if (count is int n)
                         {
                             firstOrderCheck = false;

@@ -1,7 +1,14 @@
 # Plan: Nút "Kiểm tra" — về trang chủ Seller rồi đọc lại số đơn ngay
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng)
+- **Nghiệm thu:** Cài đặt (nút Kiểm tra) đã có trong commit `27fe5cb` (do một PHIÊN CLAUDE SONG SONG của
+  người dùng commit — xem plan song sinh `...-check-don.md`; cùng tính năng, hội tụ cùng API
+  `GoHomeAndReadToShipCountAsync`). Panel rà soát đối kháng của phiên này (3 góc nhìn × 3 phiếu) tìm ra
+  3 lỗi, Fable đã sửa: (1) **gate IsLoggedIn TRƯỚC Goto** trong `GoHomeAndReadToShipCountAsync` — không
+  còn nhảy trang phá đăng nhập/captcha đang dở (lỗi cao); (2) giữ `_navigating` suốt lượt poll định kỳ
+  trong `RunAsync` → loại trừ hai chiều với nút Kiểm tra/Xử lý đơn; (3) không đè thông báo khi bị hủy
+  (bấm Dừng) giữa lúc kiểm tra. Tự chạy test sau fix: **269/269 pass**.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -128,4 +135,69 @@ nào trong việc này.
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây.>
+**Ngày thực thi:** 2026-07-15 · **Người thực thi:** Opus (`opus-executor`) · **Kết quả:** hoàn thành,
+build 0/0, test 269/269 pass.
+
+### ⚠️ Cảnh báo quan trọng cho Fable: plan này TRÙNG với `check-don.md`
+
+Khi bắt đầu, cây làm việc chính KHÔNG sạch như prompt giao việc mô tả: đã có sẵn thay đổi chưa commit
+trên đúng 6 file mã nguồn + đang được ghi tiếp trong lúc tôi làm (một lần Edit của tôi bị "file modified
+since read"). Điều tra ra: tồn tại một **plan song sinh** `plans/2026-07-15-nut-kiem-tra-ve-trang-chu-check-don.md`
+(cùng ngày, cùng tính năng "nút Kiểm tra"), đã được một `opus-executor` khác thực thi **hoàn thành** trên
+**cùng cây chính** (vi phạm quy tắc worktree-isolation cho việc song song). Khác biệt duy nhất: plan
+song sinh tách API Core thành `GoToSellerHomeAsync` + `ReadToShipCountAsync`, còn plan này (doc-don) yêu
+cầu **gộp** thành `GoHomeAndReadToShipCountAsync`. Tôi đã điều chỉnh tại chỗ để mã khớp API của plan này
+(không revert công sức, chỉ đổi tên/gộp). Trong lúc đó Fable đã **commit toàn bộ** thành
+`27fe5cb "Nut Kiem tra: ve trang chu Seller roi doc so Cho Lay Hang ngay..."` — mã trong commit dùng
+đúng API `GoHomeAndReadToShipCountAsync` (bản của plan này), kèm plan `check-don.md`.
+**Đề nghị Fable:** đánh dấu 1 trong 2 plan là trùng/superseded và không chạy 2 executor trên cùng cây.
+
+### Đã hoàn thành (đối chiếu từng bước của plan này)
+
+- **Bước 1 — `ILoginSession.GoHomeAndReadToShipCountAsync`** (`src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`):
+  interface (dòng 74) + implement trong `LoginSession` (dòng ~715). Đúng plan: page null→null; `rng` cục
+  bộ; dừng `rng.Next(800,2500)` trước; `GotoAsync(SellerUrl, DOMContentLoaded, 30s)` nuốt lỗi; dừng
+  `rng.Next(800,2500)` sau; `return await ReadToShipCountAsync(reload:false, ct)`; toàn bộ bọc try/catch→null.
+  Đã gỡ bỏ hoàn toàn `GoToSellerHomeAsync` của bản song sinh.
+- **Bước 2 — `IAccountSession.CheckOrdersAsync`** (`IAccountSession.cs` dòng 77 + `AccountSession.cs` dòng 238):
+  chụp `_session`+token dưới `_lifecycleLock` (nuốt `ObjectDisposedException`→false); guard
+  `s is null || State != Running || _navigating`→false; `_navigating=true`; StatusText "Đang về trang chủ
+  để kiểm tra đơn..."; `var count = await s.GoHomeAndReadToShipCountAsync(tok)` (1 lệnh gộp); count is int n
+  → `ToShipCount=n` + "Đã kiểm tra: Chờ Lấy Hàng = {n}." → true; else giữ nguyên `ToShipCount` + "Không đọc
+  được số đơn — có thể chưa đăng nhập xong, kiểm tra cửa sổ Brave." → false; `catch OperationCanceledException`
+  →false; `finally _navigating=false`.
+- **Bước 3 — ViewModel** (`AccountsViewModel.cs`): `CanCheckOrders => _editingId is long cid &&
+  _services.Sessions.IsRunning(cid)` (dòng 154, đúng dạng plan yêu cầu, không phải `Get(cid) is {State:Running}`
+  của bản song sinh); raise `OnPropertyChanged(nameof(CanCheckOrders))` tại đúng 3 chỗ (OnIsEditingChanged
+  d165, OnIsNewChanged d173, UpdateSelectedSessionStatus d639); `[RelayCommand] CheckOrdersAsync()` (d566)
+  đọc `_editingId` vào biến cục bộ trước await, `Get(id)` null→return, `await session.CheckOrdersAsync()`.
+- **Bước 3 (UI) — `AccountsView.axaml`** (hàng nút, dòng 163): `ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto"`;
+  nút "Kiểm tra" ở `Grid.Column="3"` Classes="secondary", `CheckOrdersCommand`, `CanCheckOrders`, có ToolTip;
+  Dừng→Column 4 (thêm `Margin="10,0,0,0"`); Xử lý đơn→Column 5; Mở trang bán hàng→Column 6.
+- **Bước 4 — Test stub:** cả 2 `StubSession` (`AccountRowViewModelTests.cs` d47, `AccountSessionManagerTests.cs` d52)
+  đã có `public Task<bool> CheckOrdersAsync() => Task.FromResult(false);`. Không có stub `ILoginSession`
+  trong test nên method Core mới không phá test nào.
+
+### Kết quả kiểm chứng (số liệu thật, tôi tự chạy)
+
+- `dotnet build XuLyDonShopee.sln -c Debug`: **Build succeeded, 0 Warning, 0 Error**.
+- `dotnet test --no-build` (lần đầu): WDAC chặn `App.dll` (0x800711C7) → **40 failed / 229 passed / 269 total**,
+  tất cả failure đều là `FileLoadException ... Application Control policy has blocked this file` (policy máy,
+  không phải lỗi code).
+- Xử lý theo plan: rebuild `dotnet build -c Debug --no-incremental -p:Deterministic=false` (0/0) rồi
+  `dotnet test --no-build` → **Passed! Failed: 0, Passed: 269, Skipped: 0, Total: 269** (qua ngay lần retry đầu).
+- Xác nhận commit: mã trong `27fe5cb` khớp toàn bộ tiêu chí; `git grep` không còn `GoToSellerHomeAsync`.
+
+### Vướng mắc / bỏ dở
+
+- Không hạng mục nào bỏ dở. **Smoke live KHÔNG chạy** (cần tài khoản Shopee thật + phiên Brave đang đăng
+  nhập) — đúng như plan §5, để người dùng smoke sau.
+
+### Điểm lệch so với plan (đã ghi rõ để nghiệm thu)
+
+- **Điều phối (không phải lỗi code):** plan này trùng `check-don.md`; hai executor chạy trên cùng cây
+  chính; Fable đã commit trong lúc tôi đang căn chỉnh. Xem cảnh báo ở đầu báo cáo.
+- **ToolTip nút Kiểm tra:** commit dùng câu của bản song sinh "Về trang chủ Seller và kiểm tra số đơn Chờ
+  Lấy Hàng ngay (không đợi chu kỳ 30')" thay vì câu trong plan này "...rồi đọc lại số đơn Chờ Lấy Hàng ngay
+  (bật khi phiên đang chạy)". Cùng ý nghĩa, chỉ khác chữ — chưa sửa để tránh tạo diff mới trên cây đã commit
+  sạch; Fable quyết định có cần đồng bộ câu chữ không.

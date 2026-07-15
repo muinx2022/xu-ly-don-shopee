@@ -1,7 +1,11 @@
 # Plan: Nút "Kiểm tra" — về trang chủ Seller rồi kiểm tra đơn (Chờ Lấy Hàng) ngay
 
+> **TRÙNG / SUPERSEDED:** Plan này do một PHIÊN CLAUDE SONG SONG tạo cho CÙNG yêu cầu nút "Kiểm tra".
+> Bản chính thức được nghiệm thu + sửa lỗi là `2026-07-15-nut-kiem-tra-ve-trang-chu-doc-don.md`
+> (cùng commit gốc `27fe5cb`, đã vá 3 lỗi panel tìm ra ở commit sau). Giữ file này làm lịch sử.
+
 - **Ngày:** 2026-07-15
-- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
+- **Trạng thái:** hoàn thành (trùng — xem plan `...-doc-don.md` là bản chốt)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 - **Nghiệm thu:** Fable soi diff (nút Kiểm tra cột 3, Dừng→4/Xử lý đơn→5/Mở trang→6; điều hướng bằng
   GotoAsync có dừng kiểu người trước/sau, không click máy; `_navigating` chặn race; giữ số cũ khi đọc
