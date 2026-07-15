@@ -217,4 +217,34 @@ public class ShopeeShippingNavTests
     {
         Assert.Equal(expected, ShopeeShippingNav.IsEditAddressModalTitle(input));
     }
+
+    // ===== IsConfirmButtonText: nút "Đồng ý" (primary) của hộp xác nhận đổi địa chỉ lấy hàng =====
+    [Theory]
+    [InlineData("Đồng ý", true)]
+    [InlineData("  đồng ý ", true)]
+    [InlineData("ĐỒNG Ý\n", true)]
+    [InlineData("đồng", false)]
+    [InlineData("Kiểm tra chi tiết", false)]
+    [InlineData("Huỷ", false)]
+    [InlineData("Lưu", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsConfirmButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsConfirmButtonText(input));
+    }
+
+    // ===== IsCheckDetailButtonText: nút "Kiểm tra chi tiết" (dấu hiệu nhận đúng hộp xác nhận) =====
+    [Theory]
+    [InlineData("Kiểm tra chi tiết", true)]
+    [InlineData("  kiểm tra  chi tiết \n", true)]
+    [InlineData("KIỂM TRA CHI TIẾT", true)]
+    [InlineData("kiểm tra", false)]
+    [InlineData("Đồng ý", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsCheckDetailButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsCheckDetailButtonText(input));
+    }
 }

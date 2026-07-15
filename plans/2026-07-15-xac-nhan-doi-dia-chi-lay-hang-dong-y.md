@@ -1,9 +1,14 @@
 # Plan: Sau khi Lưu địa chỉ lấy hàng — bấm "Đồng ý" ở hộp xác nhận (nếu có)
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable tự chạy build (0/0) + test (**295/295**, 279 nền + 16 case mới); đọc toàn bộ diff
+  3 file khớp đặc tả; panel rà soát đối kháng (2 góc nhìn × phản biện 2/3) → **0 lỗi xác nhận** (2 nghi
+  vấn về "báo Ok giả nếu Shopee thay modal Sửa bằng hộp xác nhận có khe render" bị bác vì mâu thuẫn hành
+  vi DOM quan sát). Dù bị bác, Fable **vẫn gia cố** phòng loại lỗi "thành công giả trên thao tác ghi":
+  khi modal Sửa biến mất mà CHƯA bấm "Đồng ý" → chờ ân hạn ~1.2s xem hộp xác nhận có hiện muộn không rồi
+  mới kết luận. Build lại 0/0, test 295/295.
 
 ## 1. Bối cảnh & yêu cầu
 
@@ -174,4 +179,65 @@ down→trễ→up). Có `Task.Delay` "đọc trang" giữa các nhịp. Không n
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-(để trống)
+**Thực thi:** Opus (`opus-executor`), 15/07/2026, trên cây làm việc chính.
+
+### Đã hoàn thành (đủ bước 1–5)
+
+- **Bước 1 — Helper thuần (`ShopeeShippingNav.cs`):** thêm 2 hàm public static kèm XML-doc tiếng Việt:
+  - `IsConfirmButtonText(string?)` → `NormalizeUiText(s) == "đồng ý"`.
+  - `IsCheckDetailButtonText(string?)` → `NormalizeUiText(s) == "kiểm tra chi tiết"`.
+- **Bước 2 — `FindConfirmChangePickupButtonAsync(IPage page)` (`ShopeeLoginService.cs`, trong `LoginSession`):**
+  duyệt mọi `.eds-modal__footer`; với mỗi footer tìm nút khớp `IsConfirmButtonText` qua
+  `FindButtonByTextAsync`. **Guard đúng hộp:** footer phải ĐỒNG THỜI có nút khớp `IsCheckDetailButtonText`
+  (không có → bỏ qua footer). Nút "Đồng ý" phải đang hiển thị (`HasBoundingBoxAsync` — bọc
+  `BoundingBoxAsync` graceful) mới trả về; không thấy/lỗi → `null` (bọc try/catch nuốt lỗi).
+- **Bước 3 — Sửa bước 7 trong `SetPickupAddressAsync`:** thay lời gọi `WaitEditAddressModalClosedAsync`
+  bằng `WaitPickupSaveCompletedAsync(page, 15000, mx, my, rng, ct)`; `result = ... ? Ok : SaveFailed`.
+  Thêm helper `WaitPickupSaveCompletedAsync`: poll ~300ms tới hết `timeoutMs`. Mỗi vòng: (1) nếu chưa
+  bấm — tìm hộp xác nhận, có thì bấm "Đồng ý" qua `TryHumanClickVisibleAsync`, set `confirmDone`, delay
+  `rng.Next(300,900)` rồi `continue`; (2) không (còn) hộp xác nhận + `FindEditAddressModalAsync` == null →
+  `return true`. Hết giờ → `false`. **Thứ tự:** tìm & bấm hộp xác nhận đặt TRƯỚC kiểm tra "modal đóng".
+  `ct.ThrowIfCancellationRequested()` đầu mỗi vòng + `Task.Delay(..., ct)` → hủy cắt được.
+- **Bước 4 — Like-human:** click "Đồng ý" đi qua `TryHumanClickVisibleAsync` → `HumanMoveAndClickVerifiedAsync`
+  (verified, hit-test). Có `Task.Delay` "đọc trang" giữa nhịp. KHÔNG native, KHÔNG bấm "Kiểm tra chi tiết".
+- **Bước 5 — Test (`ShopeeShippingNavTests.cs`):** thêm 2 `[Theory]`: `IsConfirmButtonText_KhopChuanHoa`
+  (9 case: "Đồng ý"/"  đồng ý "/"ĐỒNG Ý\n" → true; "đồng"/"Kiểm tra chi tiết"/"Huỷ"/"Lưu"/""/null → false)
+  và `IsCheckDetailButtonText_KhopChuanHoa` (7 case: các biến thể hoa/thường/space → true;
+  "kiểm tra"/"Đồng ý"/""/null → false).
+
+### Kết quả kiểm chứng (số liệu thật)
+
+- **Baseline (trước sửa):** `dotnet build -p:Deterministic=false` → Build succeeded 0 Warning/0 Error;
+  `dotnet test --no-build` → **Passed! Failed: 0, Passed: 279, Total: 279**.
+- **Sau sửa:** `dotnet build -p:Deterministic=false` → Build succeeded **0 Warning/0 Error**;
+  `dotnet test --no-build` → **Passed! Failed: 0, Passed: 295, Total: 295** (279 nền + 16 case mới, không
+  đỏ test cũ). WDAC không phát tác lần này (build `-p:Deterministic=false` chạy test thẳng được).
+- **Grep native click** trong `ShopeeLoginService.cs` (`.ClickAsync(` / `.FillAsync(` /
+  `Mouse.ClickAsync(` / `.CheckAsync(`): **No matches** — không có click native.
+- **`git status --short`:** đúng 3 file thay đổi (`ShopeeShippingNav.cs`, `ShopeeLoginService.cs`,
+  `ShopeeShippingNavTests.cs`) — chưa commit.
+
+### Đối chiếu tiêu chí nghiệm thu mục 4
+
+- [x] Sau Lưu: hộp xác nhận hiện → tự bấm "Đồng ý" kiểu người; không hiện → `Ok` ngay khi modal đóng
+  (vòng poll thoát sớm bằng `return true`, không chờ tới timeout).
+- [x] Nhận đúng hộp: guard footer có CẢ "Đồng ý" primary lẫn "Kiểm tra chi tiết"; không bao giờ bấm
+  "Kiểm tra chi tiết".
+- [x] Ưu tiên bấm "Đồng ý" TRƯỚC khi kết luận "modal đóng = Ok" (nhánh (1) đứng trước nhánh (2), có
+  `continue`).
+- [x] Hủy cắt được mỗi vòng; hết giờ → `SaveFailed`.
+- [x] Like-human giữ nguyên; không ClickAsync/native.
+- [x] Build 0/0; test 279 nền + 16 case mới pass (295).
+- [x] Chỉ sửa đúng 3 file trong phạm vi.
+
+### Vướng mắc/bỏ dở
+
+- Không có. **Chưa smoke live** (môi trường không có phiên Shopee thật) — chỉ build + full test + đối
+  chiếu code với DOM người dùng cung cấp trong plan, đúng như plan dặn. Cần người dùng smoke sau merge.
+
+### Ghi chú nhỏ
+
+- Pseudocode plan gọi `FindConfirmChangePickupButtonAsync(page)`/`TryHumanClickVisibleAsync(...)` không có
+  `ConfigureAwait`; bản cài đặt thêm `.ConfigureAwait(false)` cho đồng nhất với toàn bộ file (không đổi
+  hành vi). Guard "đang hiển thị" dùng `HasBoundingBoxAsync` (bọc `BoundingBoxAsync` nuốt lỗi detached)
+  thay vì gọi thẳng `BoundingBoxAsync() != null` — an toàn hơn, cùng ý nghĩa.

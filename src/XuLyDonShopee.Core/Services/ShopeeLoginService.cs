@@ -1497,8 +1497,10 @@ public class ShopeeLoginService
                         return result;
                     }
 
-                    // 7) Chờ modal đóng (Lưu xong). Đóng → Ok; không đóng (lỗi form/shop khóa) → SaveFailed.
-                    result = await WaitEditAddressModalClosedAsync(page, 15000, ct).ConfigureAwait(false)
+                    // 7) Chờ Lưu hoàn tất. Sau khi Lưu, Shopee CÓ THỂ (không chắc) bật thêm hộp xác nhận đổi
+                    //    địa chỉ lấy hàng — nếu có thì bấm "Đồng ý" kiểu người rồi chờ modal Sửa đóng.
+                    //    Hoàn tất → Ok; hết giờ (lỗi form/shop khóa / chưa chốt được) → SaveFailed.
+                    result = await WaitPickupSaveCompletedAsync(page, 15000, mx, my, rng, ct).ConfigureAwait(false)
                         ? SetPickupResult.Ok
                         : SetPickupResult.SaveFailed;
                     return result;
@@ -1848,6 +1850,92 @@ public class ShopeeLoginService
             return false;
         }
 
+        /// <summary>
+        /// Chờ thao tác <b>Lưu địa chỉ lấy hàng</b> hoàn tất, xử lý hộp xác nhận (nếu có). Sau khi bấm Lưu,
+        /// Shopee CÓ THỂ (không phải lúc nào cũng) bật thêm hộp xác nhận đổi địa chỉ lấy hàng có nút "Đồng
+        /// ý" — khi đó modal "Sửa Địa chỉ" KHÔNG đóng cho tới khi bấm "Đồng ý". Poll tới hết
+        /// <paramref name="timeoutMs"/> (mỗi vòng ~300ms):
+        /// <list type="number">
+        /// <item>Ưu tiên: hộp xác nhận hiện → bấm "Đồng ý" <b>kiểu người (verified)</b>
+        /// (<see cref="FindConfirmChangePickupButtonAsync"/> + <see cref="TryHumanClickVisibleAsync"/>),
+        /// rồi kiểm lại vòng sau. Chỉ bấm MỘT lần (cờ <c>confirmDone</c>).</item>
+        /// <item>Modal "Sửa Địa chỉ" đã đóng: nếu đã bấm "Đồng ý" → xong. Nếu CHƯA bấm mà modal biến mất →
+        /// chờ <b>ân hạn ~1.2s</b> xem hộp xác nhận có hiện muộn không (Shopee có thể THAY modal Sửa bằng hộp
+        /// xác nhận với khe render) — tránh báo Ok GIẢ; có hộp → quay lại bấm "Đồng ý", không → Lưu thẳng, xong.</item>
+        /// </list>
+        /// Thứ tự QUAN TRỌNG: bấm "Đồng ý" TRƯỚC khi coi "modal đóng = xong" — tránh trả <c>true</c> sớm khi
+        /// hộp xác nhận còn treo/hiện muộn (chưa thực sự chốt đổi địa chỉ). Hết giờ → <c>false</c>. Hủy cắt được
+        /// mỗi vòng (<see cref="CancellationToken.ThrowIfCancellationRequested"/> + <c>Task.Delay(ct)</c>).
+        /// <paramref name="mx"/>/<paramref name="my"/> chỉ dùng nội bộ (bước cuối, không cần trả ra).
+        /// </summary>
+        private static async Task<bool> WaitPickupSaveCompletedAsync(
+            IPage page, int timeoutMs, double mx, double my, Random rng, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            bool confirmDone = false;
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // 1) Hộp xác nhận đổi địa chỉ lấy hàng có thể hiện (KHÔNG chắc chắn) → bấm "Đồng ý" kiểu người.
+                if (!confirmDone)
+                {
+                    var confirmBtn = await FindConfirmChangePickupButtonAsync(page).ConfigureAwait(false);
+                    if (confirmBtn is not null)
+                    {
+                        bool ok;
+                        (mx, my, ok) = await TryHumanClickVisibleAsync(page, confirmBtn, mx, my, rng, ct).ConfigureAwait(false);
+                        if (ok)
+                        {
+                            confirmDone = true;
+                            await Task.Delay(rng.Next(300, 900), ct).ConfigureAwait(false); // "đọc" rồi tiếp
+                        }
+                        continue; // kiểm lại vòng sau (hộp tan / modal đóng)
+                    }
+                }
+
+                // 2) Modal "Sửa Địa chỉ" đã đóng.
+                if (await FindEditAddressModalAsync(page).ConfigureAwait(false) is null)
+                {
+                    // Đã bấm "Đồng ý" rồi → chốt xong.
+                    if (confirmDone)
+                    {
+                        return true;
+                    }
+
+                    // CHƯA bấm "Đồng ý" mà modal Sửa đã biến mất: hoặc (a) không cần xác nhận (Lưu thẳng),
+                    // hoặc (b) Shopee THAY modal Sửa bằng hộp xác nhận nhưng hộp CHƯA KỊP render (khe thời
+                    // gian). Ân hạn ngắn ~1.2s để hộp xác nhận (nếu có) kịp hiện — TRÁNH báo Ok GIẢ khi thực
+                    // ra còn phải bấm "Đồng ý" (thao tác ghi thật). Thấy hộp → quay lại vòng chính bấm; hết
+                    // ân hạn vẫn không có → Lưu thẳng, xong.
+                    var grace = DateTime.UtcNow.AddMilliseconds(1200);
+                    var lateConfirm = false;
+                    do
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        if (await FindConfirmChangePickupButtonAsync(page).ConfigureAwait(false) is not null)
+                        {
+                            lateConfirm = true;
+                            break;
+                        }
+                        await Task.Delay(300, ct).ConfigureAwait(false);
+                    }
+                    while (DateTime.UtcNow < grace);
+
+                    if (!lateConfirm)
+                    {
+                        return true;
+                    }
+                    continue; // hộp xác nhận hiện muộn → vòng chính (block 1) bấm "Đồng ý"
+                }
+
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return false;
+        }
+
         /// <summary>Tìm modal "Sửa Địa chỉ" hiện có: <c>.eds-modal__box</c> có <c>.title</c> khớp
         /// <see cref="ShopeeShippingNav.IsEditAddressModalTitle"/>. Không có → <c>null</c> (không ném).</summary>
         private static async Task<IElementHandle?> FindEditAddressModalAsync(IPage page)
@@ -1870,6 +1958,47 @@ public class ShopeeLoginService
                 }
             }
             catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò nút <b>"Đồng ý"</b> của <b>hộp xác nhận đổi địa chỉ lấy hàng</b> (modal thứ hai bật lên SAU khi
+        /// bấm Lưu — không phải lúc nào cũng hiện). Duyệt mọi <c>.eds-modal__footer</c> đang mở; chỉ nhận
+        /// footer nào ĐỒNG THỜI có nút khớp <see cref="ShopeeShippingNav.IsConfirmButtonText"/> ("đồng ý")
+        /// LẪN nút khớp <see cref="ShopeeShippingNav.IsCheckDetailButtonText"/> ("kiểm tra chi tiết") — dấu
+        /// hiệu riêng để KHÔNG bấm nhầm "Đồng ý" của hộp thoại khác. Nút "Đồng ý" phải đang hiển thị
+        /// (<c>BoundingBoxAsync() != null</c>) mới trả về. Không thấy / lỗi (DOM đổi, detached) →
+        /// <c>null</c> (không ném). <b>Lưu ý:</b> bấm nút này sẽ TẮT kênh vận chuyển "Trong Ngày".
+        /// </summary>
+        private static async Task<IElementHandle?> FindConfirmChangePickupButtonAsync(IPage page)
+        {
+            try
+            {
+                var footers = await page.QuerySelectorAllAsync(".eds-modal__footer").ConfigureAwait(false);
+                foreach (var footer in footers)
+                {
+                    var confirmBtn = await FindButtonByTextAsync(footer, ShopeeShippingNav.IsConfirmButtonText).ConfigureAwait(false);
+                    if (confirmBtn is null)
+                    {
+                        continue;
+                    }
+
+                    // Guard đúng hộp: footer phải có CẢ "Kiểm tra chi tiết" → tránh nhầm hộp thoại khác.
+                    var checkDetailBtn = await FindButtonByTextAsync(footer, ShopeeShippingNav.IsCheckDetailButtonText).ConfigureAwait(false);
+                    if (checkDetailBtn is null)
+                    {
+                        continue;
+                    }
+
+                    // Chỉ nhận nút "Đồng ý" đang hiển thị.
+                    if (await HasBoundingBoxAsync(confirmBtn).ConfigureAwait(false))
+                    {
+                        return confirmBtn;
+                    }
+                }
+            }
+            catch { /* DOM đổi / detached — coi như không thấy */ }
 
             return null;
         }

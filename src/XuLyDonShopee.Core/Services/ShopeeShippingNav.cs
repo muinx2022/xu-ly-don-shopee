@@ -145,6 +145,24 @@ public static class ShopeeShippingNav
     /// <summary>True nếu tiêu đề modal (đã chuẩn hóa) chính là "sửa địa chỉ".</summary>
     public static bool IsEditAddressModalTitle(string? s)
         => NormalizeUiText(s) == "sửa địa chỉ";
+
+    /// <summary>
+    /// True nếu text (đã chuẩn hóa) chính là "đồng ý" — nút <b>primary</b> của hộp xác nhận đổi địa chỉ
+    /// lấy hàng (modal thứ hai bật lên SAU khi bấm Lưu, không phải lúc nào cũng hiện). Bấm nút này CHỐT
+    /// việc đổi địa chỉ lấy hàng nhưng đồng thời TẮT kênh vận chuyển "Trong Ngày" và hình thức "Thanh toán
+    /// khi nhận hàng" — đúng theo yêu cầu người dùng. Text "đồng ý" đủ phân biệt với nút primary "lưu" của
+    /// modal Sửa Địa chỉ.
+    /// </summary>
+    public static bool IsConfirmButtonText(string? s)
+        => NormalizeUiText(s) == "đồng ý";
+
+    /// <summary>
+    /// True nếu text (đã chuẩn hóa) chính là "kiểm tra chi tiết" — nút phụ (không primary) của hộp xác
+    /// nhận đổi địa chỉ lấy hàng. Dùng làm <b>dấu hiệu riêng</b> để nhận đúng hộp xác nhận này (footer có
+    /// CẢ "Đồng ý" lẫn "Kiểm tra chi tiết") — TUYỆT ĐỐI KHÔNG bấm nút này.
+    /// </summary>
+    public static bool IsCheckDetailButtonText(string? s)
+        => NormalizeUiText(s) == "kiểm tra chi tiết";
 }
 
 /// <summary>Trạng thái sẵn sàng nhận click của link trong submenu (đọc từ DOM bằng JS hình học).</summary>
