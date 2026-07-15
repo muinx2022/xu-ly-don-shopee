@@ -163,6 +163,98 @@ public static class ShopeeShippingNav
     /// </summary>
     public static bool IsCheckDetailButtonText(string? s)
         => NormalizeUiText(s) == "kiểm tra chi tiết";
+
+    // ===== Bước 3: điều hướng "Tất cả" → Chuẩn bị hàng → tự mang ra bưu cục → In phiếu giao =====
+
+    /// <summary>True nếu <paramref name="href"/> trỏ tới trang danh sách đơn (chứa <c>/portal/sale/order</c>).</summary>
+    public static bool IsAllOrdersHref(string? href)
+        => href is not null && href.Contains("/portal/sale/order", System.StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True nếu text (đã chuẩn hóa) chính là "tất cả" — link vào danh sách đơn (tab "Chờ xử lý").</summary>
+    public static bool IsAllOrdersText(string? s)
+        => NormalizeUiText(s) == "tất cả";
+
+    /// <summary>True nếu text (đã chuẩn hóa) chính là "chuẩn bị hàng" — nút hành động trong card đơn.</summary>
+    public static bool IsPrepareOrderButtonText(string? s)
+        => NormalizeUiText(s) == "chuẩn bị hàng";
+
+    /// <summary>True nếu text (đã chuẩn hóa) chính là "xác nhận" — nút xác nhận trong modal "Giao Đơn Hàng".</summary>
+    public static bool IsConfirmArrangeButtonText(string? s)
+        => NormalizeUiText(s) == "xác nhận";
+
+    /// <summary>True nếu text (đã chuẩn hóa) chính là "in phiếu giao" — nút in phiếu trong modal "Thông Tin Chi Tiết".</summary>
+    public static bool IsPrintSlipButtonText(string? s)
+        => NormalizeUiText(s) == "in phiếu giao";
+
+    /// <summary>
+    /// True nếu tiêu đề lựa chọn (đã chuẩn hóa) <b>chứa</b> "tự mang hàng tới bưu cục" — option "Tôi sẽ tự
+    /// mang hàng tới Bưu cục" trong modal "Giao Đơn Hàng". Dùng "chứa" vì text option có thể kèm chữ khác
+    /// ("Tôi sẽ ..."). Các option khác (giao cho đơn vị vận chuyển...) không chứa chuỗi này.
+    /// </summary>
+    public static bool IsDropoffTitleText(string? s)
+        => NormalizeUiText(s).Contains("tự mang hàng tới bưu cục", System.StringComparison.Ordinal);
+
+    /// <summary>True nếu tiêu đề modal (đã chuẩn hóa) chính là "giao đơn hàng".</summary>
+    public static bool IsShipOrderModalTitle(string? s)
+        => NormalizeUiText(s) == "giao đơn hàng";
+
+    /// <summary>True nếu tiêu đề modal (đã chuẩn hóa) chính là "thông tin chi tiết".</summary>
+    public static bool IsDetailModalTitle(string? s)
+        => NormalizeUiText(s) == "thông tin chi tiết";
+
+    /// <summary>
+    /// Rút <b>mã đơn</b> từ InnerText của ô <c>.order-sn</c> (dạng "Mã đơn hàng 260715ABC..."): gộp khoảng
+    /// trắng rồi lấy <b>token cuối</b> (mã đơn là chuỗi liền không dấu cách, đứng sau nhãn "Mã đơn hàng").
+    /// GIỮ NGUYÊN hoa/thường (không chuẩn hóa lowercase — mã đơn có chữ hoa). Null/rỗng → chuỗi rỗng.
+    /// </summary>
+    public static string ExtractOrderCode(string? orderSnText)
+    {
+        if (string.IsNullOrWhiteSpace(orderSnText))
+        {
+            return string.Empty;
+        }
+
+        var tokens = orderSnText.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries);
+        return tokens.Length == 0 ? string.Empty : tokens[^1];
+    }
+
+    /// <summary>
+    /// Rút giá trị tham số <c>job_id</c> từ URL tab phiếu giao (<c>...awbprint?job_id=...&amp;shop_id=...</c>)
+    /// bằng khớp <c>job_id=([^&amp;]+)</c>. Không có / null/rỗng → chuỗi rỗng. Dùng đặt tên file phiếu khi
+    /// không có mã đơn.
+    /// </summary>
+    public static string ExtractJobId(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return string.Empty;
+        }
+
+        var m = System.Text.RegularExpressions.Regex.Match(url, "job_id=([^&]+)");
+        return m.Success ? m.Groups[1].Value : string.Empty;
+    }
+
+    /// <summary>
+    /// Làm sạch chuỗi để đặt <b>tên file</b> phiếu: giữ chữ/số/<c>-</c>/<c>_</c>, thay ký tự khác (dấu cách,
+    /// <c>/ \ : * ? " &lt; &gt; |</c>...) bằng <c>_</c>, rồi cắt <c>_</c> thừa ở hai đầu. Null/rỗng/chỉ toàn
+    /// ký tự lạ → <c>"phieu"</c> (không bao giờ trả tên rỗng).
+    /// </summary>
+    public static string SanitizeFileName(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+        {
+            return "phieu";
+        }
+
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (var ch in s.Trim())
+        {
+            sb.Append(char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' ? ch : '_');
+        }
+
+        var result = sb.ToString().Trim('_');
+        return result.Length == 0 ? "phieu" : result;
+    }
 }
 
 /// <summary>Trạng thái sẵn sàng nhận click của link trong submenu (đọc từ DOM bằng JS hình học).</summary>

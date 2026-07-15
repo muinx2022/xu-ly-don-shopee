@@ -250,7 +250,30 @@ public partial class AccountSession : ObservableObject, IAccountSession
                     $"Đã tick nhưng chưa Lưu được địa chỉ lấy hàng ({province}) — kiểm tra tay trong cửa sổ Brave.",
                 _ => $"Không đặt được địa chỉ lấy hàng ({province}) — kiểm tra tay trong cửa sổ Brave.",
             };
-            return pick == SetPickupResult.Ok;
+            if (pick != SetPickupResult.Ok)
+            {
+                return false;
+            }
+
+            // Bước 3: xử lý ĐƠN ĐẦU TIÊN (chạy 1 lần) — Chuẩn bị hàng → tự mang ra bưu cục → In phiếu giao.
+            // Mọi bước ghi log qua ActivityLog (panel + file) để smoke live thấy rõ.
+            var log = (Action<string>)(m => _services.Log.Append(_logLabel, m));
+            StatusText = "Đang xử lý đơn đầu tiên...";
+            var r = await s.ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok).ConfigureAwait(false);
+            StatusText = r switch
+            {
+                ArrangeShipmentResult.Ok => "Đã xử lý 1 đơn (đã bấm In phiếu giao).",
+                ArrangeShipmentResult.NoOrder => "Không còn đơn nào để xử lý.",
+                ArrangeShipmentResult.OrdersPageNotOpened => "Không mở được danh sách đơn (Tất cả).",
+                ArrangeShipmentResult.PrepareNotFound => "Không bấm được Chuẩn bị hàng.",
+                ArrangeShipmentResult.ShipModalNotOpened => "Không mở được ô Giao Đơn Hàng.",
+                ArrangeShipmentResult.ConfirmFailed => "Không bấm được Xác nhận giao đơn.",
+                ArrangeShipmentResult.DetailModalNotOpened => "Không mở được Thông Tin Chi Tiết.",
+                ArrangeShipmentResult.PrintFailed => "Không In phiếu giao được (không bắt được tab phiếu).",
+                _ => "Xử lý đơn gặp lỗi — kiểm tra tay trong Brave.",
+            };
+            // Coi như xong đợt nếu đã xử lý 1 đơn (Ok) hoặc không còn đơn (NoOrder); ngược lại false.
+            return r is ArrangeShipmentResult.Ok or ArrangeShipmentResult.NoOrder;
         }
         catch (OperationCanceledException)
         {

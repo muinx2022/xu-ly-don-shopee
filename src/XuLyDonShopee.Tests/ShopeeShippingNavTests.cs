@@ -247,4 +247,158 @@ public class ShopeeShippingNavTests
     {
         Assert.Equal(expected, ShopeeShippingNav.IsCheckDetailButtonText(input));
     }
+
+    // ===== Bước 3: điều hướng "Tất cả" → Chuẩn bị hàng → tự mang ra bưu cục → In phiếu giao =====
+
+    // ===== IsAllOrdersHref: "chứa" /portal/sale/order =====
+    [Theory]
+    [InlineData("/portal/sale/order", true)]
+    [InlineData("https://banhang.shopee.vn/portal/sale/order?type=toship", true)]
+    [InlineData("/portal/all-settings/shipping", false)]
+    [InlineData("/portal/sale/return", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsAllOrdersHref_DungSai(string? href, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsAllOrdersHref(href));
+    }
+
+    // ===== IsAllOrdersText =====
+    [Theory]
+    [InlineData("Tất cả", true)]
+    [InlineData("  tất cả \n", true)]
+    [InlineData("Chờ xử lý", false)]
+    [InlineData("Tất cả đơn", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsAllOrdersText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsAllOrdersText(input));
+    }
+
+    // ===== IsPrepareOrderButtonText =====
+    [Theory]
+    [InlineData("Chuẩn bị hàng", true)]
+    [InlineData("  chuẩn bị  hàng \n", true)]
+    [InlineData("CHUẨN BỊ HÀNG", true)]
+    [InlineData("Chuẩn bị", false)]
+    [InlineData("Hủy đơn", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsPrepareOrderButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsPrepareOrderButtonText(input));
+    }
+
+    // ===== IsConfirmArrangeButtonText =====
+    [Theory]
+    [InlineData("Xác nhận", true)]
+    [InlineData("  xác  nhận \n", true)]
+    [InlineData("XÁC NHẬN", true)]
+    [InlineData("Xác nhận đơn", false)]
+    [InlineData("Hủy", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsConfirmArrangeButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsConfirmArrangeButtonText(input));
+    }
+
+    // ===== IsPrintSlipButtonText =====
+    [Theory]
+    [InlineData("In phiếu giao", true)]
+    [InlineData("  in  phiếu giao \n", true)]
+    [InlineData("IN PHIẾU GIAO", true)]
+    [InlineData("In phiếu", false)]
+    [InlineData("In", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsPrintSlipButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsPrintSlipButtonText(input));
+    }
+
+    // ===== IsDropoffTitleText: "chứa" tự mang hàng tới bưu cục =====
+    [Theory]
+    [InlineData("Tôi sẽ tự mang hàng tới Bưu cục", true)]
+    [InlineData("tự mang hàng tới bưu cục", true)]
+    [InlineData("Tôi sẽ tự mang hàng tới Bưu cục\n(Miễn phí)", true)]
+    [InlineData("Giao cho đơn vị vận chuyển", false)]
+    [InlineData("Shipper tới lấy hàng", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsDropoffTitleText_ChuaChuoi(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsDropoffTitleText(input));
+    }
+
+    // ===== IsShipOrderModalTitle =====
+    [Theory]
+    [InlineData("Giao Đơn Hàng", true)]
+    [InlineData("  giao  đơn hàng \n", true)]
+    [InlineData("Thông Tin Chi Tiết", false)]
+    [InlineData("Giao Đơn", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsShipOrderModalTitle_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsShipOrderModalTitle(input));
+    }
+
+    // ===== IsDetailModalTitle =====
+    [Theory]
+    [InlineData("Thông Tin Chi Tiết", true)]
+    [InlineData("  thông tin  chi tiết \n", true)]
+    [InlineData("Giao Đơn Hàng", false)]
+    [InlineData("Thông Tin", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsDetailModalTitle_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsDetailModalTitle(input));
+    }
+
+    // ===== ExtractOrderCode: lấy token cuối, GIỮ hoa/thường =====
+    [Theory]
+    [InlineData("Mã đơn hàng 260715ABC", "260715ABC")]
+    [InlineData("260715ABC", "260715ABC")]
+    [InlineData("Mã đơn hàng\n2507158T3E4RXYZ", "2507158T3E4RXYZ")]
+    [InlineData("  Mã đơn hàng   250715abcDEF  ", "250715abcDEF")]  // giữ hoa/thường
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    public void ExtractOrderCode_LayTokenCuoi(string? input, string expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.ExtractOrderCode(input));
+    }
+
+    // ===== ExtractJobId: khớp job_id=([^&]+) =====
+    [Theory]
+    [InlineData("https://banhang.shopee.vn/awbprint?job_id=abc123&shop_id=1&lang=vi", "abc123")]
+    [InlineData("https://banhang.shopee.vn/awbprint?shop_id=1&job_id=xyz789", "xyz789")]
+    [InlineData("https://banhang.shopee.vn/awbprint?job_id=only", "only")]
+    [InlineData("https://banhang.shopee.vn/awbprint?shop_id=1", "")]
+    [InlineData("", "")]
+    [InlineData(null, "")]
+    public void ExtractJobId_KhopRegex(string? input, string expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.ExtractJobId(input));
+    }
+
+    // ===== SanitizeFileName: giữ chữ/số/-_ , ký tự lạ → _ , cắt _ thừa hai đầu, rỗng → "phieu" =====
+    [Theory]
+    [InlineData("260715ABC", "260715ABC")]
+    [InlineData("abc-def_ghi", "abc-def_ghi")]
+    [InlineData("abc/def:ghi", "abc_def_ghi")]         // / và : → _
+    [InlineData("a b c", "a_b_c")]                      // dấu cách giữa → _
+    [InlineData("  260715ABC  ", "260715ABC")]          // trim khoảng trắng đầu vào
+    [InlineData("__abc__", "abc")]                      // cắt _ thừa hai đầu
+    [InlineData("!!!", "phieu")]                         // toàn ký tự lạ → rỗng → "phieu"
+    [InlineData(null, "phieu")]
+    [InlineData("", "phieu")]
+    [InlineData("   ", "phieu")]
+    public void SanitizeFileName_LamSachTenFile(string? input, string expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.SanitizeFileName(input));
+    }
 }

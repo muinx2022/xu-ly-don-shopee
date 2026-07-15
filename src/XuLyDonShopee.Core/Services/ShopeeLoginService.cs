@@ -115,6 +115,27 @@ public interface ILoginSession : IAsyncDisposable
     /// </para>
     /// </summary>
     Task<SetPickupResult> SetPickupAddressAsync(string province, CancellationToken ct = default);
+
+    /// <summary>
+    /// <b>Bước 3 xử lý đơn — xử lý ĐƠN ĐẦU TIÊN trong danh sách "Tất cả" (tab "Chờ xử lý"):</b> điều hướng
+    /// về trang danh sách đơn (<c>/portal/sale/order</c>), lấy đơn đầu tiên → bấm <b>"Chuẩn bị hàng"</b> →
+    /// trong modal <b>"Giao Đơn Hàng"</b> chọn <b>"Tôi sẽ tự mang hàng tới Bưu cục"</b> (mặc định đã chọn)
+    /// → bấm <b>"Xác nhận"</b> → chờ modal <b>"Thông Tin Chi Tiết"</b> → bấm <b>"In phiếu giao"</b> → BẮT
+    /// tab phiếu mới, TẢI phiếu về <paramref name="downloadDir"/> + gửi lệnh in máy in mặc định (im lặng)
+    /// rồi ĐÓNG tab. <b>Toàn bộ click bằng thao tác kiểu người CÓ HIT-TEST</b> (di chuột cong, click
+    /// down→trễ→up, có dừng "đọc trang" ngẫu nhiên; KHÔNG dùng ClickAsync/Fill/native). Mỗi bước gọi
+    /// <paramref name="log"/> (nếu có) để theo dõi live.
+    /// <para>
+    /// <b>Graceful — không bao giờ ném:</b> mọi lỗi/hủy → trả một giá trị <see cref="ArrangeShipmentResult"/>
+    /// (KHÔNG phá phiên). <see cref="ArrangeShipmentResult.NoOrder"/> khi danh sách rỗng;
+    /// <see cref="ArrangeShipmentResult.Ok"/> khi đã qua bước "In phiếu giao" (bắt được tab phiếu). Việc
+    /// TẢI/IN phiếu là <b>best-effort có log</b> — thất bại chỉ cảnh báo, KHÔNG hạ kết quả xuống fail (đơn đã
+    /// được arrange). Chỉ làm MỘT đơn (chạy 1 lần).
+    /// </para>
+    /// </summary>
+    /// <param name="downloadDir">Thư mục lưu file phiếu (được tạo nếu chưa có).</param>
+    /// <param name="log">Callback ghi log từng bước (null → bỏ qua).</param>
+    Task<ArrangeShipmentResult> ProcessFirstOrderAsync(string downloadDir, Action<string>? log = null, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -2057,6 +2078,663 @@ public class ShopeeLoginService
         {
             try { return await el.BoundingBoxAsync().ConfigureAwait(false) is not null; }
             catch { return false; }
+        }
+
+        // ===== Bước 3: xử lý ĐƠN ĐẦU TIÊN — Chuẩn bị hàng → tự mang ra bưu cục → In phiếu giao =====
+        // URL danh sách đơn "Tất cả" — CHỈ dùng ở fallback cuối (khi không click được link menu kiểu người).
+        private const string AllOrdersUrl = "https://banhang.shopee.vn/portal/sale/order";
+
+        public async Task<ArrangeShipmentResult> ProcessFirstOrderAsync(
+            string downloadDir, Action<string>? log = null, CancellationToken ct = default)
+        {
+            void L(string m) => log?.Invoke(m);
+            try
+            {
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return ArrangeShipmentResult.Failed;
+                }
+
+                // Random nội bộ + con trỏ bắt đầu ở vị trí ngẫu nhiên (đồng bộ style các thao tác kiểu người).
+                var rng = new Random();
+                var vp = page.ViewportSize;
+                double vw = vp is not null ? vp.Width : 1280;
+                double vh = vp is not null ? vp.Height : 720;
+                double mx = rng.NextDouble() * vw;
+                double my = rng.NextDouble() * vh;
+
+                // Dừng "đọc trang" trước khi bắt đầu.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 1) Về danh sách đơn "Tất cả" (/portal/sale/order — trang tự vào tab "Chờ xử lý").
+                L("Về danh sách đơn (Tất cả)...");
+                (mx, my) = await GoToAllOrdersAsync(page, mx, my, rng, ct).ConfigureAwait(false);
+                if (!ShopeeShippingNav.IsAllOrdersHref(page.Url))
+                {
+                    return ArrangeShipmentResult.OrdersPageNotOpened;
+                }
+
+                // Dừng "đọc trang" + chờ danh sách render.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 2) Tìm đơn ĐẦU TIÊN. Không có card nào (list rỗng / "No Data") → NoOrder.
+                var card = await FindFirstOrderCardAsync(page, 10000, ct).ConfigureAwait(false);
+                if (card is null)
+                {
+                    L("Không còn đơn để xử lý.");
+                    return ArrangeShipmentResult.NoOrder;
+                }
+
+                // Lấy mã đơn (đặt tên file phiếu). Không có → dùng job_id trích từ URL phiếu sau.
+                var orderCode = ShopeeShippingNav.ExtractOrderCode(await ReadOrderSnAsync(card).ConfigureAwait(false));
+
+                // 3) Bấm "Chuẩn bị hàng" trong card đó.
+                var prepareBtn = await FindPrepareButtonAsync(card).ConfigureAwait(false);
+                if (prepareBtn is null)
+                {
+                    return ArrangeShipmentResult.PrepareNotFound;
+                }
+
+                bool clicked;
+                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, prepareBtn, mx, my, rng, ct).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    return ArrangeShipmentResult.PrepareNotFound;
+                }
+                L($"Bấm Chuẩn bị hàng cho đơn {(string.IsNullOrEmpty(orderCode) ? "(không rõ mã)" : orderCode)}.");
+
+                // 4) Chờ modal "Giao Đơn Hàng".
+                var shipModal = await WaitModalByTitleAsync(page, ShopeeShippingNav.IsShipOrderModalTitle, 10000, ct)
+                    .ConfigureAwait(false);
+                if (shipModal is null)
+                {
+                    return ArrangeShipmentResult.ShipModalNotOpened;
+                }
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false); // "đọc modal"
+
+                // 4a) Chọn "Tôi sẽ tự mang hàng tới Bưu cục" (mặc định đã selected → click lại vẫn an toàn).
+                var dropoff = await FindDropoffOptionAsync(shipModal).ConfigureAwait(false);
+                if (dropoff is not null && !await ElementHasClassTokenAsync(dropoff, "selected").ConfigureAwait(false))
+                {
+                    (mx, my, _) = await TryHumanClickVisibleAsync(page, dropoff, mx, my, rng, ct).ConfigureAwait(false);
+                    L("Chọn tự mang hàng tới Bưu cục.");
+                }
+
+                // 4b) Bấm "Xác nhận".
+                var confirmBtn = await FindArrangeConfirmButtonAsync(shipModal).ConfigureAwait(false);
+                if (confirmBtn is null)
+                {
+                    return ArrangeShipmentResult.ConfirmFailed;
+                }
+                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, confirmBtn, mx, my, rng, ct).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    return ArrangeShipmentResult.ConfirmFailed;
+                }
+                L("Đã xác nhận giao đơn.");
+
+                // 5) Chờ modal "Thông Tin Chi Tiết" (có thể lâu do tạo vận đơn → poll ~15s).
+                var detailModal = await WaitModalByTitleAsync(page, ShopeeShippingNav.IsDetailModalTitle, 15000, ct)
+                    .ConfigureAwait(false);
+                if (detailModal is null)
+                {
+                    return ArrangeShipmentResult.DetailModalNotOpened;
+                }
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false); // "đọc modal"
+
+                // 6) Bấm "In phiếu giao" + BẮT tab mới + tải + in + đóng.
+                var printBtn = await FindPrintButtonAsync(detailModal).ConfigureAwait(false);
+                if (printBtn is null)
+                {
+                    return ArrangeShipmentResult.PrintFailed;
+                }
+
+                // Bắt tab MỚI (bắt cả window.open) — click nút In phiếu giao NGAY trong action để bắt token 1 lần.
+                IPage? newPage = null;
+                try
+                {
+                    newPage = await _context.RunAndWaitForPageAsync(async () =>
+                    {
+                        (mx, my, _) = await TryHumanClickVisibleAsync(page, printBtn, mx, my, rng, ct).ConfigureAwait(false);
+                    }, new BrowserContextRunAndWaitForPageOptions { Timeout = 20000 }).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Không bắt được tab (click không ăn / không mở tab) → PrintFailed.
+                    return ArrangeShipmentResult.PrintFailed;
+                }
+
+                if (newPage is null)
+                {
+                    return ArrangeShipmentResult.PrintFailed;
+                }
+
+                // Từ đây: TẢI/IN best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
+                await DownloadAndPrintSlipAsync(newPage, downloadDir, orderCode, L, ct).ConfigureAwait(false);
+                return ArrangeShipmentResult.Ok;
+            }
+            catch (OperationCanceledException)
+            {
+                // Bị dừng chủ động (bấm Dừng / thoát app) → ném để ProcessOrdersAsync ở App bắt và dừng SẠCH,
+                // KHÔNG báo "Xử lý đơn gặp lỗi" (Failed) gây hiểu lầm.
+                throw;
+            }
+            catch
+            {
+                // Bất kỳ lỗi bất ngờ nào (selector đổi, context ngắt...) → Failed, KHÔNG phá phiên.
+                return ArrangeShipmentResult.Failed;
+            }
+        }
+
+        /// <summary>True nếu <paramref name="b"/> mở đầu bằng magic bytes <c>%PDF</c> (0x25 0x50 0x44 0x46) —
+        /// nhận đúng file PDF thật, tránh lưu HTML/redirect đăng nhập thành <c>.pdf</c> rác.</summary>
+        private static bool LooksPdf(byte[]? b)
+            => b is { Length: > 4 } && b[0] == 0x25 && b[1] == 0x50 && b[2] == 0x44 && b[3] == 0x46;
+
+        /// <summary>
+        /// TẢI phiếu về <paramref name="downloadDir"/> + gửi lệnh in máy in mặc định (im lặng) rồi ĐÓNG tab
+        /// — <b>best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được arrange). Tải 2 tầng:
+        /// (a) GET URL qua <c>APIRequest</c> (context đã đăng nhập); (b) fallback CDP <c>Page.printToPDF</c>.
+        /// In bằng <c>window.print()</c> (đã có cờ <c>--kiosk-printing</c> → in thẳng máy in mặc định).
+        /// </summary>
+        private async Task DownloadAndPrintSlipAsync(
+            IPage newPage, string downloadDir, string orderCode, Action<string> L, CancellationToken ct)
+        {
+            try { await newPage.WaitForLoadStateAsync(LoadState.DOMContentLoaded,
+                new PageWaitForLoadStateOptions { Timeout = 8000 }).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch { /* tab phiếu có thể vẫn đang tải — vẫn thử tải bên dưới */ }
+
+            string url;
+            try { url = newPage.Url; } catch { url = string.Empty; }
+            L($"Tab phiếu: {url}");
+
+            // Đặt tên file: mã đơn > job_id trong URL > "phieu".
+            var jobId = ShopeeShippingNav.ExtractJobId(url);
+            var baseName = !string.IsNullOrEmpty(orderCode) ? orderCode
+                         : (!string.IsNullOrEmpty(jobId) ? jobId : "phieu");
+            var fileName = ShopeeShippingNav.SanitizeFileName(baseName) + ".pdf";
+
+            string path;
+            try
+            {
+                Directory.CreateDirectory(downloadDir);
+                path = Path.Combine(downloadDir, fileName);
+            }
+            catch (Exception ex)
+            {
+                L("Cảnh báo: không tạo được thư mục lưu phiếu: " + ex.Message);
+                path = string.Empty;
+            }
+
+            // ===== TẢI (best-effort) =====
+            bool downloaded = false;
+            if (path.Length > 0 && url.Length > 0)
+            {
+                // (a) GET URL qua context đã đăng nhập. CHỈ nhận khi THỰC SỰ là PDF (content-type "pdf" hoặc
+                //     magic bytes %PDF): tab awbprint nhiều khả năng là HTML và token first_time=1 dùng 1 lần
+                //     (tab đã tự load) → GET lần 2 dễ trả HTML lỗi/redirect đăng nhập 200-OK >1000 byte. KHÔNG
+                //     được ghi rác vào .pdf, và KHÔNG set downloaded (để fallback render PDF chạy tiếp).
+                try
+                {
+                    var resp = await newPage.APIRequest.GetAsync(url).ConfigureAwait(false);
+                    if (resp.Ok)
+                    {
+                        var body = await resp.BodyAsync().ConfigureAwait(false);
+                        var isPdf = body is { Length: > 0 }
+                            && ((resp.Headers.TryGetValue("content-type", out var ctype)
+                                    && ctype.Contains("pdf", StringComparison.OrdinalIgnoreCase))
+                                || LooksPdf(body));
+                        if (isPdf)
+                        {
+                            await File.WriteAllBytesAsync(path, body!, ct).ConfigureAwait(false);
+                            downloaded = true;
+                            L($"Đã tải phiếu: {path} ({body!.Length} bytes).");
+                        }
+                        else
+                        {
+                            L("GET URL trả nội dung KHÔNG phải PDF (token có thể đã tiêu / HTML) — bỏ, thử render PDF.");
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    L("Tải qua GET URL chưa được: " + ex.Message);
+                }
+
+                // (b) Fallback CDP Page.printToPDF (render trang thành PDF).
+                if (!downloaded)
+                {
+                    try
+                    {
+                        var cdp = await _context.NewCDPSessionAsync(newPage).ConfigureAwait(false);
+                        var res = await cdp.SendAsync("Page.printToPDF", new Dictionary<string, object>
+                        {
+                            ["printBackground"] = true,
+                            ["preferCSSPageSize"] = true,
+                        }).ConfigureAwait(false);
+
+                        // SendAsync trả JsonElement? (null nếu lệnh không có payload) → lấy "data" (base64) an toàn.
+                        string? data = res is JsonElement je && je.TryGetProperty("data", out var d)
+                            ? d.GetString()
+                            : null;
+                        if (!string.IsNullOrEmpty(data))
+                        {
+                            var bytes = Convert.FromBase64String(data);
+                            if (LooksPdf(bytes))
+                            {
+                                await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
+                                downloaded = true;
+                                L($"Đã tải phiếu (render PDF fallback): {path} ({bytes.Length} bytes).");
+                            }
+                            else
+                            {
+                                L("Render PDF fallback trả dữ liệu KHÔNG phải PDF — bỏ, không ghi file.");
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        L("Render PDF fallback chưa được: " + ex.Message);
+                    }
+                }
+            }
+
+            if (!downloaded)
+            {
+                L("Cảnh báo: CHƯA tải được phiếu (cả GET URL lẫn render PDF) — đơn vẫn đã được arrange.");
+            }
+
+            // ===== IN (best-effort): window.print() → in im lặng máy in mặc định (--kiosk-printing). =====
+            try
+            {
+                var printTask = newPage.EvaluateAsync("() => window.print()");
+                // Chặn treo: window.print() thường trả nhanh khi kiosk-printing, nhưng bọc timeout đề phòng.
+                await Task.WhenAny(printTask, Task.Delay(5000, ct)).ConfigureAwait(false);
+                L("Đã gửi lệnh in (window.print, in im lặng máy in mặc định).");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                L("Gửi lệnh in chưa được: " + ex.Message);
+            }
+
+            // ===== ĐÓNG tab phiếu =====
+            try
+            {
+                await newPage.CloseAsync().ConfigureAwait(false);
+                L("Đã đóng tab phiếu.");
+            }
+            catch (Exception ex)
+            {
+                L("Đóng tab phiếu chưa được: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Điều hướng về danh sách đơn "Tất cả" (<c>/portal/sale/order</c>) KIỂU NGƯỜI CÓ HIT-TEST: tìm link
+        /// "Tất cả" trong menu trái (nhóm "Quản Lý Đơn Hàng") → nếu submenu đang cụp thì click mục cha để
+        /// bung → click link verified → chờ URL. Fallback cuối: <see cref="IPage.GotoAsync"/>. Trả về vị trí
+        /// chuột mới. Kết quả (tới được trang hay chưa) người gọi tự kiểm qua <c>page.Url</c>.
+        /// </summary>
+        private static async Task<(double X, double Y)> GoToAllOrdersAsync(
+            IPage page, double mx, double my, Random rng, CancellationToken ct)
+        {
+            bool parentClicked = false;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                var link = await FindAllOrdersLinkAsync(page, 8000, rng, ct).ConfigureAwait(false);
+                if (link is null)
+                {
+                    // Submenu có thể đang cụp → click mục cha "Quản Lý Đơn Hàng" MỘT lần để bung rồi tìm lại.
+                    if (parentClicked)
+                    {
+                        break;
+                    }
+                    var parent = await FindOrderMenuParentAsync(page, ct).ConfigureAwait(false);
+                    if (parent is null)
+                    {
+                        break;
+                    }
+                    (mx, my, _) = await HumanMoveAndClickVerifiedAsync(page, parent, mx, my, rng, ct).ConfigureAwait(false);
+                    parentClicked = true;
+                    await Task.Delay(rng.Next(500, 1500), ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                bool clicked;
+                (mx, my, clicked) = await HumanMoveAndClickVerifiedAsync(page, link, mx, my, rng, ct).ConfigureAwait(false);
+                if (clicked && await WaitAllOrdersPageAsync(page, 15000, ct).ConfigureAwait(false))
+                {
+                    return (mx, my);
+                }
+                break;
+            }
+
+            // Fallback cuối (kém human hơn — hiếm khi tới nếu click kiểu người đã ăn).
+            try
+            {
+                await page.GotoAsync(AllOrdersUrl, new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 30000
+                }).ConfigureAwait(false);
+            }
+            catch { /* nuốt lỗi điều hướng — người gọi kiểm page.Url */ }
+
+            await WaitAllOrdersPageAsync(page, 15000, ct).ConfigureAwait(false);
+            return (mx, my);
+        }
+
+        /// <summary>
+        /// Dò link "Tất cả" (danh sách đơn) trong menu trái, poll tới hết <paramref name="timeoutMs"/>. Thử:
+        /// (a) <c>a[test-id='my orders new'][href*='/portal/sale/order']</c>; (b) duyệt mọi
+        /// <c>a.sidebar-submenu-item-link</c> có href là <c>/portal/sale/order</c> và text khớp
+        /// <see cref="ShopeeShippingNav.IsAllOrdersText"/>. Chỉ nhận element đang hiển thị. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindAllOrdersLinkAsync(
+            IPage page, int timeoutMs, Random rng, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var el = await FirstVisibleByBoxAsync(
+                             page, "a[test-id='my orders new'][href*='/portal/sale/order']", ct).ConfigureAwait(false);
+                if (el is not null)
+                {
+                    return el;
+                }
+
+                try
+                {
+                    var links = await page.QuerySelectorAllAsync("a.sidebar-submenu-item-link").ConfigureAwait(false);
+                    foreach (var a in links)
+                    {
+                        var href = await a.GetAttributeAsync("href").ConfigureAwait(false);
+                        if (!ShopeeShippingNav.IsAllOrdersHref(href))
+                        {
+                            continue;
+                        }
+                        if (ShopeeShippingNav.IsAllOrdersText(await a.InnerTextAsync().ConfigureAwait(false))
+                            && await a.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                        {
+                            return a;
+                        }
+                    }
+                }
+                catch { /* chưa render / selector không hợp lệ — thử vòng sau */ }
+
+                await Task.Delay(rng.Next(300, 501), ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>Chờ trang danh sách đơn "Tất cả" mở (URL khớp <see cref="ShopeeShippingNav.IsAllOrdersHref"/>),
+        /// poll tới hết <paramref name="timeoutMs"/>. Hết giờ → false.</summary>
+        private static async Task<bool> WaitAllOrdersPageAsync(IPage page, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    if (ShopeeShippingNav.IsAllOrdersHref(page.Url))
+                    {
+                        return true;
+                    }
+                }
+                catch { /* điều hướng dở — thử vòng sau */ }
+
+                await Task.Delay(250, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return false;
+        }
+
+        /// <summary>
+        /// Dò card đơn ĐẦU TIÊN trong danh sách, poll tới hết <paramref name="timeoutMs"/>. Thử:
+        /// (a) <c>a.order-card[data-testid='order-item']</c>; (b) <c>[data-testid='order-item']</c>;
+        /// (c) <c>.order-card</c>. Chỉ nhận card đang hiển thị. Không có card nào (list rỗng / "No Data") →
+        /// <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindFirstOrderCardAsync(IPage page, int timeoutMs, CancellationToken ct)
+        {
+            string[] selectors =
+            {
+                "a.order-card[data-testid='order-item']",
+                "[data-testid='order-item']",
+                ".order-card",
+            };
+
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                foreach (var sel in selectors)
+                {
+                    var el = await FirstVisibleByBoxAsync(page, sel, ct).ConfigureAwait(false);
+                    if (el is not null)
+                    {
+                        return el;
+                    }
+                }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>Đọc InnerText của ô <c>.order-sn</c> trong card (để trích mã đơn). Không có → <c>null</c>.</summary>
+        private static async Task<string?> ReadOrderSnAsync(IElementHandle card)
+        {
+            try
+            {
+                var sn = await card.QuerySelectorAsync(".order-sn").ConfigureAwait(false);
+                if (sn is not null)
+                {
+                    return await sn.InnerTextAsync().ConfigureAwait(false);
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò nút "Chuẩn bị hàng" trong card đơn: (a) <c>button[data-testid='action-button-2']</c>;
+        /// (b) fallback button trong <c>.order-actions</c> khớp <see cref="ShopeeShippingNav.IsPrepareOrderButtonText"/>;
+        /// (c) fallback mọi button trong card khớp text. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindPrepareButtonAsync(IElementHandle card)
+        {
+            try
+            {
+                var btn = await card.QuerySelectorAsync("button[data-testid='action-button-2']").ConfigureAwait(false);
+                if (btn is not null)
+                {
+                    return btn;
+                }
+
+                var actions = await card.QuerySelectorAsync(".order-actions").ConfigureAwait(false);
+                if (actions is not null)
+                {
+                    var found = await FindButtonByTextAsync(actions, ShopeeShippingNav.IsPrepareOrderButtonText).ConfigureAwait(false);
+                    if (found is not null)
+                    {
+                        return found;
+                    }
+                }
+
+                return await FindButtonByTextAsync(card, ShopeeShippingNav.IsPrepareOrderButtonText).ConfigureAwait(false);
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò option "Tôi sẽ tự mang hàng tới Bưu cục" trong modal "Giao Đơn Hàng":
+        /// (a) <c>[data-testid='dropoff-option']</c>; (b) fallback phần tử con có text khớp
+        /// <see cref="ShopeeShippingNav.IsDropoffTitleText"/>. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindDropoffOptionAsync(IElementHandle modal)
+        {
+            try
+            {
+                var opt = await modal.QuerySelectorAsync("[data-testid='dropoff-option']").ConfigureAwait(false);
+                if (opt is not null)
+                {
+                    return opt;
+                }
+
+                // Fallback: CHỈ duyệt CARD dropoff (class thật "dropoff-method-card selected card") — KHÔNG
+                // duyệt div/label/li chung, vì phần tử TỔ TIÊN (div bọc cả modal) cũng "chứa" text title →
+                // trả về sẽ click nhắm giữa vùng lớn → chọn nhầm. Không thấy card → null (thà không click).
+                var cards = await modal.QuerySelectorAllAsync(".dropoff-method-card").ConfigureAwait(false);
+                foreach (var c in cards)
+                {
+                    if (ShopeeShippingNav.IsDropoffTitleText(await c.InnerTextAsync().ConfigureAwait(false))
+                        && await c.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                    {
+                        return c;
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò nút "Xác nhận" trong modal "Giao Đơn Hàng": (a) <c>[data-testid='arrange-shipment-confirm']</c>;
+        /// (b) fallback button khớp <see cref="ShopeeShippingNav.IsConfirmArrangeButtonText"/>. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindArrangeConfirmButtonAsync(IElementHandle modal)
+        {
+            try
+            {
+                var btn = await modal.QuerySelectorAsync("[data-testid='arrange-shipment-confirm']").ConfigureAwait(false);
+                if (btn is not null)
+                {
+                    return btn;
+                }
+
+                var footer = await modal.QuerySelectorAsync(".eds-modal__footer").ConfigureAwait(false);
+                var scope = footer ?? modal;
+                return await FindButtonByTextAsync(scope, ShopeeShippingNav.IsConfirmArrangeButtonText).ConfigureAwait(false);
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò nút "In phiếu giao" trong modal "Thông Tin Chi Tiết": (a) <c>button[data-testid='print-button']</c>;
+        /// (b) fallback button khớp <see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindPrintButtonAsync(IElementHandle modal)
+        {
+            try
+            {
+                var btn = await modal.QuerySelectorAsync("button[data-testid='print-button']").ConfigureAwait(false);
+                if (btn is not null)
+                {
+                    return btn;
+                }
+
+                return await FindButtonByTextAsync(modal, ShopeeShippingNav.IsPrintSlipButtonText).ConfigureAwait(false);
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Chờ modal (<c>.eds-modal__box</c>) có tiêu đề khớp <paramref name="titleMatch"/> xuất hiện, poll
+        /// tới hết <paramref name="timeoutMs"/>. Tiêu đề đọc từ <c>.eds-modal__title</c> (fallback <c>.title</c>).
+        /// Không hiện → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> WaitModalByTitleAsync(
+            IPage page, Func<string?, bool> titleMatch, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                var modal = await FindModalByTitleAsync(page, titleMatch).ConfigureAwait(false);
+                if (modal is not null)
+                {
+                    return modal;
+                }
+
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>Tìm modal <c>.eds-modal__box</c> có tiêu đề (<c>.eds-modal__title</c> hoặc <c>.title</c>)
+        /// khớp <paramref name="titleMatch"/>. Không có → <c>null</c> (không ném).</summary>
+        private static async Task<IElementHandle?> FindModalByTitleAsync(IPage page, Func<string?, bool> titleMatch)
+        {
+            try
+            {
+                var boxes = await page.QuerySelectorAllAsync(".eds-modal__box").ConfigureAwait(false);
+                foreach (var box in boxes)
+                {
+                    var title = await box.QuerySelectorAsync(".eds-modal__title").ConfigureAwait(false)
+                                ?? await box.QuerySelectorAsync(".title").ConfigureAwait(false);
+                    if (title is null)
+                    {
+                        continue;
+                    }
+
+                    if (titleMatch(await title.InnerTextAsync().ConfigureAwait(false)))
+                    {
+                        return box;
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>True nếu chuỗi class của phần tử chứa token <paramref name="token"/> (tách theo khoảng
+        /// trắng, không phân biệt hoa/thường). Nuốt lỗi handle detached → false.</summary>
+        private static async Task<bool> ElementHasClassTokenAsync(IElementHandle el, string token)
+        {
+            try
+            {
+                var classAttr = await el.GetAttributeAsync("class").ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(classAttr))
+                {
+                    return false;
+                }
+
+                foreach (var c in classAttr.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (string.Equals(c, token, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch { /* detached — coi như không có token */ }
+
+            return false;
         }
 
         public async ValueTask DisposeAsync()

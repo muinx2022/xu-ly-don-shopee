@@ -1,9 +1,16 @@
 # Plan: Xử lý MỘT đơn — Chuẩn bị hàng → tự mang ra bưu cục → In phiếu giao (tải + in máy)
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live 1 đơn chờ người dùng — cần đơn thật + máy in mặc định)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable tự chạy build 0/0 + test **382/382** (+76 ca helper thuần); đọc toàn bộ diff
+  (ProcessFirstOrderAsync + DownloadAndPrintSlipAsync + helper — bám mẫu poll/fallback/click-verified);
+  panel rà soát đối kháng 27 agent → **1 lỗi cao + 2 vừa + 1 thấp**, đã sửa: (1) tải GET-URL không kiểm
+  định dạng → lưu HTML rác thành .pdf + báo thành công giả + chặn fallback → thêm `LooksPdf` (magic %PDF)
+  + content-type, chỉ nhận PDF thật ở cả 2 nhánh; (2) FindDropoffOptionAsync fallback trả tổ tiên → siết
+  chỉ `.dropoff-method-card`; (3) hủy giữa xử lý bị báo Failed → rethrow OCE. Sửa xong build 0/0, test
+  382/382. **CHƯA smoke live** phần bắt-tab/tải/in — chờ người dùng chạy 1 đơn thật + gửi log + kiểm
+  `D:\Phieu-giao-hang` để chốt tab awbprint là PDF hay HTML.
 
 ## 1. Bối cảnh & yêu cầu
 
@@ -186,6 +193,130 @@ StatusText = r switch {
 
 ---
 
-## Báo cáo thực thi (Opus điền sau khi xong)
+## Báo cáo thực thi (Opus điền — 2026-07-15)
 
-(để trống)
+### Baseline TRƯỚC khi sửa
+- `dotnet test XuLyDonShopee.sln -c Debug` → **Passed: 306, Failed: 0** (đúng nền plan nêu). Lần chạy này
+  KHÔNG bị WDAC chặn (0x800711C7), nên không cần `-p:Deterministic=false`.
+
+### Đã hoàn thành theo từng bước
+
+**Bước 1 — Cờ in im lặng + helper thuần**
+- `src/XuLyDonShopee.Core/Services/BraveLaunchArgs.cs`: thêm `"--kiosk-printing"` vào danh sách args (kèm
+  comment giải thích in im lặng máy in mặc định).
+- `src/XuLyDonShopee.Tests/BraveLaunchArgsTests.cs`: thêm test `CoCoKioskPrinting` (assert args chứa
+  `--kiosk-printing`).
+- `src/XuLyDonShopee.Core/Services/ShopeeShippingNav.cs`: thêm các hàm thuần (XML-doc TV):
+  `IsAllOrdersHref` (chứa `/portal/sale/order`), `IsAllOrdersText` (== "tất cả"), `IsPrepareOrderButtonText`
+  (== "chuẩn bị hàng"), `IsConfirmArrangeButtonText` (== "xác nhận"), `IsPrintSlipButtonText`
+  (== "in phiếu giao"), `IsDropoffTitleText` (CHỨA "tự mang hàng tới bưu cục"), `IsShipOrderModalTitle`
+  (== "giao đơn hàng"), `IsDetailModalTitle` (== "thông tin chi tiết"), `ExtractOrderCode` (token cuối,
+  giữ hoa/thường), `ExtractJobId` (regex `job_id=([^&]+)`), `SanitizeFileName` (giữ chữ/số/-_, ký tự lạ→_,
+  cắt _ thừa, rỗng→"phieu").
+  - **Ghi chú lệch plan (nhỏ, đã tự quyết):** plan liệt kê 5 helper bắt buộc; tôi thêm các helper hỗ trợ
+    (`IsAllOrdersHref/Text`, `IsShipOrderModalTitle`, `IsDetailModalTitle`, `ExtractOrderCode`,
+    `ExtractJobId`) — đều là hàm thuần trong ĐÚNG file `ShopeeShippingNav.cs` mà implementation cần tới,
+    và đều có test. Không phát sinh file ngoài phạm vi.
+
+**Bước 2 — Enum kết quả**
+- `src/XuLyDonShopee.Core/Services/ArrangeShipmentResult.cs` (MỚI): enum 9 giá trị đúng như plan
+  (`Ok, NoOrder, Failed, OrdersPageNotOpened, PrepareNotFound, ShipModalNotOpened, ConfirmFailed,
+  DetailModalNotOpened, PrintFailed`), XML-doc TV.
+
+**Bước 3 — `ProcessFirstOrderAsync`**
+- Interface `ILoginSession` (trong `ShopeeLoginService.cs`): thêm
+  `Task<ArrangeShipmentResult> ProcessFirstOrderAsync(string downloadDir, Action<string>? log = null, CancellationToken ct = default)`
+  + XML-doc TV.
+- `LoginSession` implement đầy đủ 8 bước:
+  1. Lấy `page`; `rng`, `mx/my` như các method cũ.
+  2. `GoToAllOrdersAsync` (kiểu người CÓ HIT-TEST: tìm link "Tất cả" `a[test-id='my orders new']` / duyệt
+     `a.sidebar-submenu-item-link` khớp href `/portal/sale/order` + text "tất cả"; submenu cụp → click mục
+     cha "Quản Lý Đơn Hàng" verified rồi tìm lại; chờ URL ~15s; fallback cuối `GotoAsync`). Không tới được →
+     `OrdersPageNotOpened`.
+  3. `FindFirstOrderCardAsync` (`a.order-card[data-testid='order-item']` → `[data-testid='order-item']` →
+     `.order-card`, poll ~10s). Rỗng → `NoOrder`.
+  4. Mã đơn từ `.order-sn` qua `ExtractOrderCode`. Bấm "Chuẩn bị hàng"
+     (`button[data-testid='action-button-2']` → fallback `.order-actions`/card theo text) qua
+     `TryHumanClickVisibleAsync`. Không được → `PrepareNotFound`.
+  5. Chờ modal "Giao Đơn Hàng" (`WaitModalByTitleAsync`, `.eds-modal__title`/`.title`). Chọn dropoff
+     (`[data-testid='dropoff-option']` / fallback text CHỨA; CHỈ click nếu class chưa có "selected", click
+     lại vẫn an toàn). Bấm "Xác nhận" (`[data-testid='arrange-shipment-confirm']` / fallback text) verified.
+     Không mở modal → `ShipModalNotOpened`; không bấm được Xác nhận → `ConfirmFailed`.
+  6. Chờ modal "Thông Tin Chi Tiết" (~15s). Không mở → `DetailModalNotOpened`.
+  7. Tìm "In phiếu giao" (`button[data-testid='print-button']` / fallback text). BẮT tab mới bằng
+     `_context.RunAndWaitForPageAsync(...)` với click nút NGAY trong action (token 1 lần), timeout 20s. Không
+     bắt được → `PrintFailed`. Trong `DownloadAndPrintSlipAsync`: (a) tải qua `newPage.APIRequest.GetAsync`
+     (ghi file nếu Ok & body > 1000 bytes); (b) fallback CDP `Page.printToPDF` (base64 `data` → decode →
+     ghi); in qua `newPage.EvaluateAsync("() => window.print()")` (bọc timeout 5s chống treo); đóng tab. Tên
+     file: `{mã đơn}` > `{job_id}` > `phieu`, qua `SanitizeFileName` + `.pdf`, lưu `D:\Phieu-giao-hang`. Trả
+     `Ok`.
+  8. Try/catch ngoài → `Failed`. Tải/in thất bại KHÔNG hạ kết quả (chỉ log cảnh báo).
+- MỌI bước gọi `L(...)` (callback log). MỌI click nghiệp vụ qua `TryHumanClickVisibleAsync` /
+  `HumanMoveAndClickVerifiedAsync` (đều hit-test verified); dừng "đọc trang/modal" ngẫu nhiên xen kẽ.
+
+**Bước 4 — Wire vào `AccountSession.ProcessOrdersAsync`**
+- `src/XuLyDonShopee.App/Services/AccountSession.cs`: sau nhánh `pick == Ok`, gọi
+  `ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok)` với `log = m => _services.Log.Append(_logLabel, m)`;
+  set `StatusText` theo switch enum đúng như plan; `return r is Ok or NoOrder`. Nhánh `pick != Ok` giữ nguyên
+  `return false`. `_navigating`/`finally` GIỮ NGUYÊN.
+
+**Bước 5 — Test + build**
+- Thêm test thuần trong `ShopeeShippingNavTests.cs` cho toàn bộ helper mới (11 nhóm Theory).
+
+### Kết quả kiểm chứng (lệnh thật đã chạy)
+- `dotnet build XuLyDonShopee.sln -c Debug` → **Build succeeded. 0 Warning(s), 0 Error(s)**.
+  - (Có 1 lỗi biên dịch trung gian đã sửa: `ICDPSession.SendAsync` trả `Task<JsonElement?>` chứ không phải
+    `JsonElement` — đã đổi sang `res is JsonElement je && je.TryGetProperty(...)`.)
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build` → **Passed: 382, Failed: 0, Skipped: 0**
+  (306 nền + 76 ca mới: 75 ca ShopeeShippingNav + 1 ca BraveLaunchArgs). Không bị WDAC chặn.
+- Grep `\.ClickAsync\(|\.FillAsync\(|Mouse\.ClickAsync\(|\.CheckAsync\(|\.PressAsync\(|\.SetCheckedAsync\(`
+  trong `ShopeeLoginService.cs` → KHÔNG có; chỉ còn `page.Keyboard.TypeAsync` DUY NHẤT ở luồng login CŨ
+  (`HumanFillAsync`), không phải code mới. Code mới 100% click qua hit-test verified.
+- `git status --short` → đúng 7 file trong plan (1 mới + 6 sửa), không dư.
+
+### Vướng mắc / chưa kiểm chứng được (trung thực)
+- **KHÔNG smoke live được** (đúng như plan dặn): môi trường không có phiên Shopee đăng nhập + đơn thật, và
+  WDAC. Toàn bộ nhánh **bắt tab mới / tải phiếu / in / đóng tab** mới CHỈ được phủ bằng build + đối chiếu
+  code với DOM (data-testid) người dùng cung cấp — CHƯA chạy thật.
+- **`Page.printToPDF` ở chế độ headful (Brave thật qua CDP)**: một số bản Chromium từng chỉ hỗ trợ
+  `printToPDF` ở headless. Nếu bản Brave hiện tại từ chối, nhánh (b) sẽ log "Render PDF fallback chưa được"
+  và (nếu (a) cũng fail) log cảnh báo "CHƯA tải được phiếu" — KHÔNG phá đơn. Cần smoke để biết nhánh (a)
+  GET-URL hay (b) render PDF thực sự ăn.
+- **`window.print()` in im lặng** phụ thuộc máy có sẵn máy in mặc định; không có thì không ra giấy (vẫn
+  best-effort, có log). Chưa kiểm được trên máy này.
+- **Bản chất tab `awbprint`** (PDF trực tiếp hay HTML) vẫn chưa xác minh offline — thiết kế tải 2 tầng +
+  log rõ từng nhánh để lần smoke đầu chỉ ra đúng cái gì xảy ra (xem log panel + `D:\Phieu-giao-hang`).
+
+### Đề xuất cho Fable khi smoke
+- Chạy 1 đơn thật, gửi lại các dòng log (nhãn tài khoản) quanh "Tab phiếu: ..." để biết URL + nhánh tải nào
+  ăn; kiểm thư mục `D:\Phieu-giao-hang` có file `.pdf` (tên = mã đơn) và kích thước hợp lý.
+- Nếu cả 2 nhánh tải đều fail: cân nhắc plan sau dùng `page.WaitForDownloadAsync` (nếu nút In kích hoạt
+  download trực tiếp) hoặc lưu HTML rồi in, tuỳ bản chất tab `awbprint` quan sát được.
+
+---
+
+## Sửa theo nghiệm thu (2026-07-15) — panel rà soát đối kháng 27 agent
+
+Fable nghiệm thu (build 0/0 + 382/382) rồi panel phản biện tìm 3 điểm, tất cả CHỈ trong
+`src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`. Đã sửa cả 3:
+
+- **Lỗi 1 (CAO) — tải phiếu lưu nhầm HTML thành `.pdf` + chặn fallback:** trong
+  `DownloadAndPrintSlipAsync`, thêm helper `LooksPdf(byte[])` (magic bytes `%PDF` = 25 50 44 46).
+  - Nhánh (a) GET URL: chỉ nhận khi `resp.Ok && body.Length>0 && (content-type chứa "pdf" || LooksPdf(body))`
+    → ghi + `downloaded=true`. Ngược lại log "GET URL trả nội dung KHÔNG phải PDF ... — bỏ, thử render PDF."
+    và KHÔNG set `downloaded` (để fallback CDP chạy). Bỏ điều kiện cũ `Length>1000` ghi thẳng.
+  - Nhánh (b) CDP `printToPDF`: chỉ ghi + `downloaded=true` khi `LooksPdf(bytes)`; ngược lại log cảnh báo,
+    KHÔNG ghi. Không bao giờ ghi file rác; câu "CHƯA tải được phiếu" giữ nguyên khi cả 2 fail.
+- **Lỗi 2 (VỪA) — `FindDropoffOptionAsync` fallback trả tổ tiên:** đổi selector fallback từ `"div,label,li"`
+  sang `".dropoff-method-card"` (class thật `dropoff-method-card selected card`); duyệt card khớp
+  `IsDropoffTitleText` + có bounding box → trả card đó; không thấy → null (thà không click còn hơn nhắm
+  giữa div tổ tiên bọc cả modal).
+- **Lỗi 3 (THẤP) — hủy giữa xử lý đơn bị báo Failed:** thêm `catch (OperationCanceledException) { throw; }`
+  NGAY TRƯỚC bare `catch { return Failed; }` của `ProcessFirstOrderAsync` (để `ProcessOrdersAsync` ở App bắt
+  OCE → dừng sạch). Trong `DownloadAndPrintSlipAsync`, thêm `catch (OperationCanceledException) { throw; }`
+  trước các `catch` bọc thao tác ct: `WaitForLoadStateAsync`, GET URL (có `File.WriteAllBytesAsync(...,ct)`),
+  CDP printToPDF (có `File.WriteAllBytesAsync(...,ct)`), `window.print()` (có `Task.Delay(...,ct)`).
+
+**Kiểm chứng sau sửa:** `dotnet build XuLyDonShopee.sln -c Debug` → **0 Warning, 0 Error**;
+`dotnet test --no-build` → **382 pass, 0 fail** (không bị WDAC chặn → không cần `-p:Deterministic=false`).
+Chỉ đụng đúng `ShopeeLoginService.cs`; không commit (chờ Fable nghiệm thu lại).

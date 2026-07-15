@@ -30,6 +30,16 @@ public class BraveLaunchArgsTests
     }
 
     [Fact]
+    public void CoCoKioskPrinting()
+    {
+        // In IM LẶNG ra máy in mặc định khi window.print(): Brave không hiện hộp thoại Print — dùng để
+        // tự in phiếu giao hàng. Cờ này BẮT BUỘC có để bước "In phiếu giao" in thẳng máy in mặc định.
+        var args = BraveLaunchArgs.BuildBraveArgs("/tmp/p", 0, null);
+
+        Assert.Contains("--kiosk-printing", args);
+    }
+
+    [Fact]
     public void KhongChua_EnableAutomation_VaKhongChua_Headless()
     {
         var args = BraveLaunchArgs.BuildBraveArgs("/tmp/p", 0, null);
