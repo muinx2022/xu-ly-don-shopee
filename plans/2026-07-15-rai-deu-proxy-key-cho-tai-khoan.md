@@ -1,8 +1,10 @@
 # Plan: Rải đều KiotProxy key cho các tài khoản khi bấm Lưu
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
+- **Nghiệm thu:** Fable đọc code (Distribute + SaveKeys khớp plan, đúng round-robin, ô trống không đụng
+  ProxyKey) + tự chạy `dotnet test --no-build`: **166/166 pass** (158 nền + 8 test mới).
 
 ## 1. Bối cảnh & mục tiêu
 
@@ -130,4 +132,47 @@ Sửa `SaveKeys()` trong `src/XuLyDonShopee.App/ViewModels/ProxiesViewModel.cs`:
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây.>
+**Trạng thái:** Hoàn thành toàn bộ plan. Build 0 error/0 warning, test 166/166 pass.
+
+### Đã hoàn thành
+
+- **Bước 1 — Hàm rải key (Core):** Tạo mới `src/XuLyDonShopee.Core/Services/ProxyKeyDistributor.cs`.
+  `ProxyKeyDistributor.Distribute(IReadOnlyList<string> keys, IReadOnlyList<Account> accounts)`:
+  `keys.Count == 0 || accounts.Count == 0` → trả 0, không đổi gì; ngược lại gán
+  `accounts[i].ProxyKey = keys[i % keys.Count]` cho mọi i, trả `accounts.Count`. Hàm thuần, không đụng DB.
+- **Bước 2 — Gọi trong ViewModel:** Sửa `SaveKeys()` trong
+  `src/XuLyDonShopee.App/ViewModels/ProxiesViewModel.cs`. Sau `SetKiotProxyKeys` + `Keys = Join(...)`:
+  - `keys.Count == 0` → giữ nguyên thông báo cũ `"Đã lưu (chưa có key — sẽ dùng IP máy)."`, `return` sớm,
+    không đụng `ProxyKey` tài khoản nào.
+  - `keys.Count > 0` → `GetAll()` → `ProxyKeyDistributor.Distribute` → lặp `Update(acc)` từng tài khoản →
+    thông báo `$"Đã lưu {keys.Count} key, đã rải cho {accounts.Count} tài khoản."` (hoặc
+    `$"Đã lưu {keys.Count} key (chưa có tài khoản nào để rải)."` khi `accounts.Count == 0`).
+- **Bước 3 — Test:**
+  - Tạo mới `src/XuLyDonShopee.Tests/ProxyKeyDistributorTests.cs` (5 test): ví dụ 10 tài khoản/4 key;
+    1 key nhiều tài khoản; 5 key/3 tài khoản (key thừa không dùng); keys rỗng giữ nguyên ProxyKey cũ;
+    accounts rỗng trả 0 không ném.
+  - Tạo mới `src/XuLyDonShopee.Tests/ProxiesViewModelTests.cs` (3 test): rải round-robin cho 10 tài khoản
+    (có seed vài ProxyKey cũ để kiểm ghi đè) + kiểm settings lưu 4 key + thông báo "rải cho 10 tài khoản";
+    ô trống bấm Lưu không đổi ProxyKey + thông báo cũ; có key nhưng chưa tài khoản → thông báo
+    "chưa có tài khoản nào để rải".
+
+### Kết quả kiểm chứng
+
+- `dotnet build XuLyDonShopee.sln -c Debug` → **Build succeeded, 0 Warning, 0 Error.**
+- `dotnet test XuLyDonShopee.sln -c Debug` (lần đầu) → 158 fail/8 pass, **tất cả fail cùng một lỗi WDAC**
+  `FileLoadException ... An Application Control policy has blocked this file. (0x800711C7)` trên
+  `XuLyDonShopee.Core.dll` — đúng chính sách máy nêu trong mục Rủi ro, không phải lỗi code.
+- Build lại `-p:Deterministic=false` rồi `dotnet test --no-build` → **Passed! Failed: 0, Passed: 166,
+  Total: 166.** (Baseline hiện tại là 158 test cũ trên cây chính — đã gồm test của các việc chưa commit
+  khác, nhiều hơn con số 123 ghi trong plan — cộng 8 test mới của việc này = 166.)
+- Chạy lọc riêng 8 test mới (`ProxyKeyDistributorTests` + `ProxiesViewModelTests`) → **Passed 8/8.**
+
+### Vướng mắc / bỏ dở
+
+- Không có hạng mục nào bỏ dở. Lưu ý duy nhất: lần test đầu bị WDAC chặn DLL mới build; xử lý bằng build
+  lại `-p:Deterministic=false` (đổi hash → ISG cho phép), sau đó pass sạch — đúng như plan dự liệu.
+
+### Đề xuất
+
+- Không. Plan đủ chi tiết, thực thi khớp hoàn toàn; chỉ lưu ý số test baseline trên cây chính giờ là 158
+  (không phải 123) do các việc song song chưa commit đã thêm test.

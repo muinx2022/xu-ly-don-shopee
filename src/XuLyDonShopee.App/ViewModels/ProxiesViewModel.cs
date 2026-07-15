@@ -63,9 +63,25 @@ public partial class ProxiesViewModel : ViewModelBase
         var keys = KiotProxyKeyParser.Parse(Keys);
         _services.Settings.SetKiotProxyKeys(keys);
         Keys = KiotProxyKeyParser.Join(keys); // hiển thị bản đã chuẩn hóa
-        SavedKeysMessage = keys.Count == 0
-            ? "Đã lưu (chưa có key — sẽ dùng IP máy)."
-            : $"Đã lưu {keys.Count} key.";
+
+        if (keys.Count == 0)
+        {
+            // Ô trống: chỉ lưu settings, KHÔNG đụng ProxyKey của tài khoản nào.
+            SavedKeysMessage = "Đã lưu (chưa có key — sẽ dùng IP máy).";
+            return;
+        }
+
+        // Rải đều key cho toàn bộ tài khoản (round-robin) rồi lưu từng tài khoản.
+        var accounts = _services.Accounts.GetAll();
+        ProxyKeyDistributor.Distribute(keys, accounts);
+        foreach (var acc in accounts)
+        {
+            _services.Accounts.Update(acc);
+        }
+
+        SavedKeysMessage = accounts.Count == 0
+            ? $"Đã lưu {keys.Count} key (chưa có tài khoản nào để rải)."
+            : $"Đã lưu {keys.Count} key, đã rải cho {accounts.Count} tài khoản.";
     }
 
     [RelayCommand]
