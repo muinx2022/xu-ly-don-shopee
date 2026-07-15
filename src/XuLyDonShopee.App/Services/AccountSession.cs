@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using XuLyDonShopee.App.ViewModels;
 using XuLyDonShopee.Core.Models;
 using XuLyDonShopee.Core.Services;
 
@@ -162,9 +163,11 @@ public partial class AccountSession : ObservableObject, IAccountSession
     }
 
     /// <summary>
-    /// Bước đầu xử lý đơn: trong phiên đang chạy, điều hướng KIỂU NGƯỜI tới "Cài Đặt Vận Chuyển" → tab
-    /// "Địa Chỉ". Bật cờ <see cref="_navigating"/> để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn giữa
-    /// chừng (phá thao tác). Graceful: phiên chưa chạy / bị hủy / lỗi → false, KHÔNG ném.
+    /// Xử lý đơn: trong phiên đang chạy, điều hướng KIỂU NGƯỜI tới "Cài Đặt Vận Chuyển" → tab "Địa Chỉ"
+    /// (bước 1), rồi <b>đặt địa chỉ lấy hàng</b> theo tỉnh mặc định của tài khoản
+    /// (<see cref="AccountsViewModel.DefaultPickupAddress"/> nếu chưa chọn) (bước 2). Bật cờ
+    /// <see cref="_navigating"/> bao trùm cả 2 bước để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn
+    /// giữa chừng (phá thao tác). Graceful: phiên chưa chạy / bị hủy / lỗi → false, KHÔNG ném.
     /// </summary>
     public async Task<bool> ProcessOrdersAsync()
     {
@@ -193,11 +196,26 @@ public partial class AccountSession : ObservableObject, IAccountSession
         StatusText = "Đang mở Cài đặt vận chuyển → Địa Chỉ (kiểu người)...";
         try
         {
+            // Bước 1: mở Cài đặt vận chuyển → tab Địa Chỉ.
             var ok = await s.OpenShippingAddressSettingsAsync(tok).ConfigureAwait(false);
-            StatusText = ok
-                ? "Đã mở tab Địa Chỉ (Cài đặt vận chuyển)."
-                : "Không mở được Cài đặt vận chuyển — thao tác tay trong cửa sổ Brave.";
-            return ok;
+            if (!ok)
+            {
+                StatusText = "Không mở được Cài đặt vận chuyển — thao tác tay trong cửa sổ Brave.";
+                return false;
+            }
+
+            // Bước 2: đặt địa chỉ lấy hàng theo tỉnh mặc định của tài khoản (null/rỗng → mặc định app).
+            var acc = _services.Accounts.GetById(_accountId);
+            var province = string.IsNullOrWhiteSpace(acc?.PickupAddress)
+                ? AccountsViewModel.DefaultPickupAddress
+                : acc!.PickupAddress!;
+
+            StatusText = $"Đang chọn địa chỉ lấy hàng ({province})...";
+            var okPickup = await s.SetPickupAddressAsync(province, tok).ConfigureAwait(false);
+            StatusText = okPickup
+                ? $"Đã đặt địa chỉ lấy hàng: {province}."
+                : $"Không đặt được địa chỉ lấy hàng ({province}) — kiểm tra tay trong cửa sổ Brave.";
+            return okPickup;
         }
         catch (OperationCanceledException)
         {

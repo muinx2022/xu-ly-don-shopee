@@ -1,7 +1,11 @@
 # Plan: Xử lý đơn — bước 2: duyệt địa chỉ & đặt "địa chỉ lấy hàng" theo tỉnh mặc định
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
+- **Nghiệm thu:** Fable đọc code `SetPickupAddressAsync` (mọi nhánh không chắc chắn đều bấm Hủy thay vì
+  Lưu; chỉ Lưu sau khi checkbox xác nhận đã tick; chỉ click khi có BoundingBox; grep không còn
+  ClickAsync/FillAsync/CheckAsync thẳng) + wiring `ProcessOrdersAsync` (tỉnh null → mặc định app,
+  `_navigating` bao trùm 2 bước) + tự chạy test: **269/269 pass** (thêm 58 case helper).
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 - **Phụ thuộc:** (1) plan `2026-07-15-nut-xu-ly-don-mo-cai-dat-van-chuyen.md` (ĐÃ commit — nút Xử lý đơn
   + `OpenShippingAddressSettingsAsync` + `ShopeeShippingNav`); (2) plan
@@ -235,4 +239,57 @@ Thêm vào `src/XuLyDonShopee.Core/Services/ShopeeShippingNav.cs`:
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây.>
+**Ngày thực thi:** 2026-07-15 · **Kết quả:** Hoàn thành toàn bộ 4 bước. Build 0/0, test 269/269 pass
+(baseline 211 + 58 case mới).
+
+### Đã hoàn thành
+
+- **Bước 1 — helper thuần** (`src/XuLyDonShopee.Core/Services/ShopeeShippingNav.cs`): thêm
+  `ProvinceCoreName`, `AddressDetailMatchesProvince`, `IsPickupTagText`, `IsEditButtonText`,
+  `IsCancelButtonText`, `IsSaveButtonText`, `IsSetPickupCheckboxText`, `IsEditAddressModalTitle`. Khớp
+  tỉnh trên DÒNG CUỐI không rỗng của `.detail` (tách `\n`, chuẩn hóa, `Contains(ProvinceCoreName)`);
+  detail 1 dòng → fallback toàn chuỗi.
+- **Bước 2 — `SetPickupAddressAsync`** (`src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`): thêm
+  method vào `ILoginSession` (XML-doc) + implement trong `LoginSession`. Luồng đúng plan: chờ danh sách
+  địa chỉ (poll 15s) → tìm địa chỉ khớp tỉnh đầu tiên → có tag "Địa chỉ lấy hàng" thì trả true (không
+  đụng) → chưa có thì bấm Sửa → chờ modal "Sửa Địa chỉ" (10s) → checkbox "Đặt làm địa chỉ lấy hàng":
+  đã tick → Hủy + true; chưa tick → click kiểu người (retry 1 lần) → bấm Lưu → chờ modal đóng (15s) →
+  true. Mọi click qua helper mới `TryHumanClickVisibleAsync` (scroll + CHỈ click khi
+  `BoundingBoxAsync() != null`, box null → không click) → gọi `HumanMoveAndClickAsync` sẵn có. Các nhánh
+  thoát an toàn khỏi modal đều bấm Hủy (`HumanCancelModalAsync`) rồi false; sau khi đã bấm Lưu mà modal
+  không đóng → false, KHÔNG bấm thêm. Toàn bộ bọc try/catch → false. Đọc `.detail` lọc đúng
+  `span.label == "địa chỉ"` (không lấy nhầm hàng "Số điện thoại").
+- **Bước 3 — nối vào `AccountSession.ProcessOrdersAsync`** (`src/XuLyDonShopee.App/Services/AccountSession.cs`):
+  thêm `using XuLyDonShopee.App.ViewModels;`; sau khi `OpenShippingAddressSettingsAsync` trả true → đọc
+  `acc.PickupAddress` (null/rỗng → `AccountsViewModel.DefaultPickupAddress`) → StatusText "Đang chọn địa
+  chỉ lấy hàng ({province})..." → gọi `SetPickupAddressAsync` → StatusText cuối theo kết quả → trả
+  `okPickup`. `_navigating` (finally tắt) bao trùm cả 2 bước.
+- **Bước 4 — test** (`src/XuLyDonShopee.Tests/ShopeeShippingNavTests.cs`): thêm 58 case cho 8 helper mới,
+  gồm ví dụ Thanh Hóa 3 dòng của người dùng, bẫy "dòng đầu chứa tỉnh khác", "Thành phố Hồ Chí Minh" ↔
+  "TP Hồ Chí Minh", và phân biệt "đặt làm địa chỉ mặc đinh"/"trả hàng" khỏi "lấy hàng".
+
+### Kết quả kiểm chứng (số liệu thật)
+
+- `dotnet build XuLyDonShopee.sln -c Debug` → **Build succeeded, 0 Warning, 0 Error**.
+- Rebuild test WDAC: `dotnet build src/XuLyDonShopee.Tests -c Debug --no-incremental -p:Deterministic=false`
+  → 0/0.
+- `dotnet test src/XuLyDonShopee.Tests --no-build` → **Failed: 0, Passed: 269, Skipped: 0** (~1s).
+- `git status --short`: đúng 4 file trong phạm vi plan (ShopeeShippingNav.cs, ShopeeLoginService.cs,
+  AccountSession.cs, ShopeeShippingNavTests.cs). Không commit.
+- Grep xác nhận KHÔNG có `ClickAsync/FillAsync/CheckAsync` thẳng trong Core service (chỉ còn
+  `Keyboard.TypeAsync` cũ của luồng login).
+
+### Vướng mắc / bỏ dở
+
+- Không có. Smoke live cần tài khoản Shopee thật → KHÔNG chạy được trong môi trường này, KHÔNG claim; cần
+  người dùng smoke sau merge (bấm "Xử lý đơn" trên tài khoản có Chờ lấy hàng > 0).
+
+### Điểm lệch / lưu ý cho kiến trúc sư
+
+- **StatusText nhánh false gộp chung:** vì `SetPickupAddressAsync` trả `bool`, tầng App (plan Bước 3) set
+  một StatusText chung "Không đặt được địa chỉ lấy hàng ({province}) — kiểm tra tay..." cho MỌI nhánh
+  false (không tìm thấy địa chỉ / modal không mở / checkbox không tick / Lưu không đóng). Mục "Quyết định
+  đã chốt" mô tả các câu StatusText riêng theo nhánh ("Không tìm thấy địa chỉ ở <tỉnh>...", "Không lưu
+  được..."), nhưng Bước 3 (đặc tả cụ thể) chỉ định câu chung — đã theo Bước 3 để giữ tách tầng
+  (Core không set StatusText của App). Nếu muốn thông báo chi tiết theo nhánh, cần đổi kiểu trả về thành
+  enum/kết quả giàu hơn ở plan sau.

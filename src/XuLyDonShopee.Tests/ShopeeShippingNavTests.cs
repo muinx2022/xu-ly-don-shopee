@@ -78,4 +78,125 @@ public class ShopeeShippingNavTests
     {
         Assert.Equal(expected, ShopeeShippingNav.IsAddressTabText(input));
     }
+
+    // ===== ProvinceCoreName: tên lõi tỉnh từ Account.PickupAddress (bỏ tiền tố loại đơn vị) =====
+    [Theory]
+    [InlineData("Hà Nội", "hà nội")]
+    [InlineData("TP Hồ Chí Minh", "hồ chí minh")]
+    [InlineData("Thanh Hóa", "thanh hóa")]
+    [InlineData("Thành phố Hà Nội", "hà nội")]
+    [InlineData("Tỉnh Thanh Hóa", "thanh hóa")]
+    [InlineData("TP. Hồ Chí Minh", "hồ chí minh")]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    public void ProvinceCoreName_BoTienTo(string? input, string expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.ProvinceCoreName(input));
+    }
+
+    // ===== AddressDetailMatchesProvince: khớp trên DÒNG CUỐI không rỗng của .detail =====
+    [Theory]
+    // ví dụ người dùng: địa chỉ Thanh Hóa 3 dòng → khớp "Thanh Hóa", KHÔNG khớp "Hà Nội"
+    [InlineData("xom thang , dong quang\nPhường Đông Sơn\nTỉnh Thanh Hóa", "Thanh Hóa", true)]
+    [InlineData("xom thang , dong quang\nPhường Đông Sơn\nTỉnh Thanh Hóa", "Hà Nội", false)]
+    // địa chỉ Hà Nội: dòng cuối "Thành phố Hà Nội" → khớp "Hà Nội"
+    [InlineData("Số 76, Ngõ 76 Đường Trung Văn, Phường Đại Mỗ, Thành phố Hà Nội, Việt Nam\nPhường Đại Mỗ\nThành phố Hà Nội", "Hà Nội", true)]
+    // "Thành phố Hồ Chí Minh" (dòng cuối) khớp option app "TP Hồ Chí Minh"
+    [InlineData("123 Đường ABC\nPhường 1\nThành phố Hồ Chí Minh", "TP Hồ Chí Minh", true)]
+    // detail 1 dòng chứa tỉnh → khớp (fallback toàn chuỗi)
+    [InlineData("Số 1, Đường X, Tỉnh Thanh Hóa", "Thanh Hóa", true)]
+    // BẪY: dòng ĐẦU chứa "Thành phố Hà Nội" nhưng dòng CUỐI "Tỉnh Thanh Hóa" → chỉ khớp Thanh Hóa
+    [InlineData("Ngõ 5, gần Thành phố Hà Nội, Việt Nam\nPhường Đông Sơn\nTỉnh Thanh Hóa", "Hà Nội", false)]
+    [InlineData("Ngõ 5, gần Thành phố Hà Nội, Việt Nam\nPhường Đông Sơn\nTỉnh Thanh Hóa", "Thanh Hóa", true)]
+    // dòng cuối rỗng (xuống dòng thừa) vẫn lấy dòng "Tỉnh Thanh Hóa"
+    [InlineData("Phường Đông Sơn\nTỉnh Thanh Hóa\n\n", "Thanh Hóa", true)]
+    // null/rỗng detail hoặc province → false
+    [InlineData(null, "Thanh Hóa", false)]
+    [InlineData("", "Thanh Hóa", false)]
+    [InlineData("Tỉnh Thanh Hóa", null, false)]
+    [InlineData("Tỉnh Thanh Hóa", "", false)]
+    public void AddressDetailMatchesProvince_DungDongCuoi(string? detail, string? province, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.AddressDetailMatchesProvince(detail, province));
+    }
+
+    // ===== IsSetPickupCheckboxText: CHỈ khớp "đặt làm địa chỉ lấy hàng" =====
+    [Theory]
+    [InlineData("Đặt làm địa chỉ lấy hàng", true)]
+    [InlineData("  đặt làm  địa chỉ lấy hàng \n", true)]
+    [InlineData("Đặt làm địa chỉ mặc đinh", false)]   // chính tả THẬT của Shopee (thiếu dấu) — KHÔNG khớp
+    [InlineData("Đặt làm địa chỉ mặc định", false)]
+    [InlineData("Đặt làm địa chỉ trả hàng", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsSetPickupCheckboxText_ChiKhopLayHang(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsSetPickupCheckboxText(input));
+    }
+
+    // ===== IsPickupTagText =====
+    [Theory]
+    [InlineData("Địa chỉ lấy hàng", true)]
+    [InlineData("  địa chỉ  lấy hàng \n", true)]
+    [InlineData("Default Address", false)]
+    [InlineData("Địa chỉ trả hàng", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsPickupTagText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsPickupTagText(input));
+    }
+
+    // ===== IsEditButtonText =====
+    [Theory]
+    [InlineData("Sửa", true)]
+    [InlineData("  sửa \n", true)]
+    [InlineData("Xóa", false)]
+    [InlineData("Lưu", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsEditButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsEditButtonText(input));
+    }
+
+    // ===== IsCancelButtonText =====
+    [Theory]
+    [InlineData("Hủy", true)]
+    [InlineData("  hủy ", true)]
+    [InlineData("Lưu", false)]
+    [InlineData("Sửa", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsCancelButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsCancelButtonText(input));
+    }
+
+    // ===== IsSaveButtonText =====
+    [Theory]
+    [InlineData("Lưu", true)]
+    [InlineData("  lưu \n", true)]
+    [InlineData("Hủy", false)]
+    [InlineData("Lưu và thoát", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsSaveButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsSaveButtonText(input));
+    }
+
+    // ===== IsEditAddressModalTitle =====
+    [Theory]
+    [InlineData("Sửa Địa chỉ", true)]
+    [InlineData("  sửa  địa chỉ \n", true)]
+    [InlineData("Thêm Địa chỉ", false)]
+    [InlineData("Địa chỉ", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsEditAddressModalTitle_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsEditAddressModalTitle(input));
+    }
 }

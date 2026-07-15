@@ -72,6 +72,23 @@ public interface ILoginSession : IAsyncDisposable
     /// </para>
     /// </summary>
     Task<bool> OpenShippingAddressSettingsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// <b>Bước 2 xử lý đơn — đặt "địa chỉ lấy hàng":</b> chạy khi ĐANG ở tab "Địa Chỉ" của Cài đặt vận
+    /// chuyển. Duyệt danh sách địa chỉ, tìm địa chỉ có dòng tỉnh/thành khớp
+    /// <paramref name="province"/> (<c>Account.PickupAddress</c>). Nếu địa chỉ đó đã là địa chỉ lấy hàng
+    /// (có tag "Địa chỉ lấy hàng") → coi như xong. Ngược lại bấm <b>Sửa</b> → tick checkbox "Đặt làm địa
+    /// chỉ lấy hàng" → bấm <b>Lưu</b> → chờ modal đóng. <b>Toàn bộ bằng thao tác kiểu người</b> (di chuột
+    /// theo đường cong, click down→trễ→up, dừng "đọc trang" ngẫu nhiên giữa các bước); CHỈ click khi phần
+    /// tử có bounding box.
+    /// <para>
+    /// <b>Graceful — không bao giờ ném:</b> không tìm thấy địa chỉ khớp, modal không mở (shop bị khóa
+    /// sửa), checkbox không tick được, hoặc modal không đóng sau khi Lưu → trả <c>false</c> (KHÔNG phá
+    /// phiên, nghiêng về KHÔNG bấm thêm). Trả <c>true</c> khi địa chỉ lấy hàng đã đúng (sẵn có hoặc đã
+    /// Lưu thành công).
+    /// </para>
+    /// </summary>
+    Task<bool> SetPickupAddressAsync(string province, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -1073,6 +1090,441 @@ public class ShopeeLoginService
             catch { /* selector không hợp lệ / chưa render */ }
 
             return null;
+        }
+
+        // ===== Bước 2: đặt "địa chỉ lấy hàng" theo tỉnh mặc định (KIỂU NGƯỜI) =====
+
+        public async Task<bool> SetPickupAddressAsync(string province, CancellationToken ct = default)
+        {
+            try
+            {
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return false;
+                }
+
+                // Random nội bộ + con trỏ bắt đầu ở vị trí ngẫu nhiên (đồng bộ style các thao tác kiểu người).
+                var rng = new Random();
+                var vp = page.ViewportSize;
+                double vw = vp is not null ? vp.Width : 1280;
+                double vh = vp is not null ? vp.Height : 720;
+                double mx = rng.NextDouble() * vw;
+                double my = rng.NextDouble() * vh;
+
+                // Dừng "đọc trang" trước khi bắt đầu.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 1) Chờ danh sách địa chỉ & tìm địa chỉ khớp tỉnh (đầu tiên theo thứ tự trang).
+                var item = await FindMatchingAddressItemAsync(page, province, 15000, ct).ConfigureAwait(false);
+                if (item is null)
+                {
+                    return false; // "Không tìm thấy địa chỉ ở <tỉnh>" — App tự set StatusText.
+                }
+
+                // 2) Đã là địa chỉ lấy hàng (có tag) → coi như xong, KHÔNG đụng gì.
+                if (await ItemHasPickupTagAsync(item).ConfigureAwait(false))
+                {
+                    return true;
+                }
+
+                // 3) Tìm & bấm nút "Sửa" của địa chỉ đó (chỉ click khi có bounding box).
+                var editBtn = await FindEditButtonAsync(item).ConfigureAwait(false);
+                if (editBtn is null)
+                {
+                    return false;
+                }
+
+                bool clicked;
+                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, editBtn, mx, my, rng, ct).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    return false;
+                }
+
+                // 4) Chờ modal "Sửa Địa chỉ" mở (shop bị khóa sửa → không mở → false). Dừng "đọc modal".
+                var modal = await WaitEditAddressModalAsync(page, 10000, ct).ConfigureAwait(false);
+                if (modal is null)
+                {
+                    return false;
+                }
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 5) Checkbox "Đặt làm địa chỉ lấy hàng".
+                var (label, input) = await FindPickupCheckboxAsync(modal).ConfigureAwait(false);
+                if (label is null || input is null)
+                {
+                    // Không tìm được checkbox → an toàn: Hủy (không ghi gì), false.
+                    (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                    return false;
+                }
+
+                if (await input.IsCheckedAsync().ConfigureAwait(false))
+                {
+                    // Đã tick sẵn = trạng thái mong muốn đã có → Hủy (không đổi gì), true.
+                    (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                    return true;
+                }
+
+                // Chưa tick → click kiểu người vào label.
+                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, label, mx, my, rng, ct).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                    return false;
+                }
+                await Task.Delay(rng.Next(300, 900), ct).ConfigureAwait(false);
+
+                // Best-effort kiểm lại: chưa tick → thử click thêm 1 lần; vẫn không được → Hủy, false.
+                if (!await input.IsCheckedAsync().ConfigureAwait(false))
+                {
+                    (mx, my, _) = await TryHumanClickVisibleAsync(page, label, mx, my, rng, ct).ConfigureAwait(false);
+                    await Task.Delay(rng.Next(300, 900), ct).ConfigureAwait(false);
+                    if (!await input.IsCheckedAsync().ConfigureAwait(false))
+                    {
+                        (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                        return false;
+                    }
+                }
+
+                // 6) Bấm "Lưu" (GHI lên shop thật). Không tìm/không click được → Hủy (bỏ tick), false.
+                var saveBtn = await FindSaveButtonAsync(modal).ConfigureAwait(false);
+                if (saveBtn is null)
+                {
+                    (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                    return false;
+                }
+
+                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, saveBtn, mx, my, rng, ct).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                    return false;
+                }
+
+                // 7) Chờ modal đóng (Lưu xong). Không đóng (lỗi form/shop khóa) → false, KHÔNG bấm thêm.
+                return await WaitEditAddressModalClosedAsync(page, 15000, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Bất kỳ lỗi nào (selector đổi, context ngắt, hủy...) → false, KHÔNG phá phiên.
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Dò địa chỉ (<c>.address-list .address-item-container</c>) đầu tiên có ô "Địa chỉ" khớp
+        /// <paramref name="province"/>, poll tới khi hết <paramref name="timeoutMs"/> (danh sách có thể
+        /// render dần). Không có item khớp → <c>null</c> (không ném).
+        /// </summary>
+        private static async Task<IElementHandle?> FindMatchingAddressItemAsync(
+            IPage page, string province, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var items = await page.QuerySelectorAllAsync(".address-list .address-item-container")
+                        .ConfigureAwait(false);
+                    foreach (var it in items)
+                    {
+                        var detail = await ReadAddressDetailAsync(it).ConfigureAwait(false);
+                        if (ShopeeShippingNav.AddressDetailMatchesProvince(detail, province))
+                        {
+                            return it; // địa chỉ khớp ĐẦU TIÊN theo thứ tự trang
+                        }
+                    }
+                }
+                catch { /* chưa render / selector không hợp lệ — thử vòng sau */ }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>
+        /// Đọc InnerText của ô <c>.detail</c> thuộc hàng "Địa chỉ" trong một địa chỉ: duyệt các
+        /// <c>div.grid</c>, lấy grid có <c>span.label</c> chuẩn hóa == "địa chỉ" (KHÔNG lấy nhầm
+        /// <c>.detail</c> của hàng "Số điện thoại"). Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<string?> ReadAddressDetailAsync(IElementHandle item)
+        {
+            try
+            {
+                var grids = await item.QuerySelectorAllAsync("div.grid").ConfigureAwait(false);
+                foreach (var grid in grids)
+                {
+                    var label = await grid.QuerySelectorAsync("span.label").ConfigureAwait(false);
+                    if (label is null)
+                    {
+                        continue;
+                    }
+
+                    var labelText = ShopeeShippingNav.NormalizeUiText(
+                        await label.InnerTextAsync().ConfigureAwait(false));
+                    if (labelText != "địa chỉ")
+                    {
+                        continue;
+                    }
+
+                    var detail = await grid.QuerySelectorAsync(".detail").ConfigureAwait(false);
+                    if (detail is not null)
+                    {
+                        return await detail.InnerTextAsync().ConfigureAwait(false);
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>True nếu địa chỉ có tag "Địa chỉ lấy hàng" (đang là địa chỉ lấy hàng của shop).</summary>
+        private static async Task<bool> ItemHasPickupTagAsync(IElementHandle item)
+        {
+            try
+            {
+                var tags = await item.QuerySelectorAllAsync(".address-label").ConfigureAwait(false);
+                foreach (var tag in tags)
+                {
+                    if (ShopeeShippingNav.IsPickupTagText(await tag.InnerTextAsync().ConfigureAwait(false)))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Dò nút "Sửa" trong một địa chỉ: ưu tiên các <c>button</c> trong <c>.operations</c>, fallback mọi
+        /// <c>button</c> trong item; khớp <see cref="ShopeeShippingNav.IsEditButtonText"/>. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindEditButtonAsync(IElementHandle item)
+        {
+            try
+            {
+                var ops = await item.QuerySelectorAsync(".operations").ConfigureAwait(false);
+                if (ops is not null)
+                {
+                    var found = await FindButtonByTextAsync(ops, ShopeeShippingNav.IsEditButtonText).ConfigureAwait(false);
+                    if (found is not null)
+                    {
+                        return found;
+                    }
+                }
+
+                return await FindButtonByTextAsync(item, ShopeeShippingNav.IsEditButtonText).ConfigureAwait(false);
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò nút "Lưu" trong footer modal: ưu tiên <c>button.eds-button--primary</c> trong
+        /// <c>.eds-modal__footer</c>, fallback button có text khớp <see cref="ShopeeShippingNav.IsSaveButtonText"/>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindSaveButtonAsync(IElementHandle modal)
+        {
+            try
+            {
+                var footer = await modal.QuerySelectorAsync(".eds-modal__footer").ConfigureAwait(false);
+                var scope = footer ?? modal;
+
+                var primary = await scope.QuerySelectorAsync("button.eds-button--primary").ConfigureAwait(false);
+                if (primary is not null)
+                {
+                    return primary;
+                }
+
+                return await FindButtonByTextAsync(scope, ShopeeShippingNav.IsSaveButtonText).ConfigureAwait(false);
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>Dò nút "Hủy" trong footer modal (fallback: toàn modal), khớp
+        /// <see cref="ShopeeShippingNav.IsCancelButtonText"/>. Không thấy → <c>null</c>.</summary>
+        private static async Task<IElementHandle?> FindCancelButtonAsync(IElementHandle modal)
+        {
+            try
+            {
+                var footer = await modal.QuerySelectorAsync(".eds-modal__footer").ConfigureAwait(false);
+                var scope = footer ?? modal;
+                return await FindButtonByTextAsync(scope, ShopeeShippingNav.IsCancelButtonText).ConfigureAwait(false);
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>Duyệt mọi <c>button</c> trong <paramref name="scope"/>, trả cái đầu tiên có InnerText
+        /// khớp <paramref name="match"/>. Không thấy → <c>null</c>.</summary>
+        private static async Task<IElementHandle?> FindButtonByTextAsync(
+            IElementHandle scope, Func<string?, bool> match)
+        {
+            var buttons = await scope.QuerySelectorAllAsync("button").ConfigureAwait(false);
+            foreach (var b in buttons)
+            {
+                if (match(await b.InnerTextAsync().ConfigureAwait(false)))
+                {
+                    return b;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Trong modal, dò cặp (label, input) của checkbox "Đặt làm địa chỉ lấy hàng": duyệt
+        /// <c>label.eds-checkbox</c>, khớp <c>span.eds-checkbox__label</c> qua
+        /// <see cref="ShopeeShippingNav.IsSetPickupCheckboxText"/> rồi lấy <c>input.eds-checkbox__input</c>
+        /// bên trong. Không thấy → <c>(null, null)</c>.
+        /// </summary>
+        private static async Task<(IElementHandle? Label, IElementHandle? Input)> FindPickupCheckboxAsync(
+            IElementHandle modal)
+        {
+            try
+            {
+                var labels = await modal.QuerySelectorAllAsync("label.eds-checkbox").ConfigureAwait(false);
+                foreach (var label in labels)
+                {
+                    var span = await label.QuerySelectorAsync("span.eds-checkbox__label").ConfigureAwait(false);
+                    if (span is null)
+                    {
+                        continue;
+                    }
+
+                    if (ShopeeShippingNav.IsSetPickupCheckboxText(await span.InnerTextAsync().ConfigureAwait(false)))
+                    {
+                        var input = await label.QuerySelectorAsync("input.eds-checkbox__input").ConfigureAwait(false);
+                        return (label, input);
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return (null, null);
+        }
+
+        /// <summary>
+        /// Chờ modal "Sửa Địa chỉ" xuất hiện (<c>.eds-modal__box</c> có <c>.title</c> khớp
+        /// <see cref="ShopeeShippingNav.IsEditAddressModalTitle"/>), poll tới hết <paramref name="timeoutMs"/>.
+        /// Không hiện → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> WaitEditAddressModalAsync(IPage page, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                var modal = await FindEditAddressModalAsync(page).ConfigureAwait(false);
+                if (modal is not null)
+                {
+                    return modal;
+                }
+
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>
+        /// Chờ modal "Sửa Địa chỉ" <b>biến mất</b> (bấm Lưu xong), poll tới hết <paramref name="timeoutMs"/>.
+        /// Đóng → <c>true</c>; hết giờ (vẫn còn) → <c>false</c>.
+        /// </summary>
+        private static async Task<bool> WaitEditAddressModalClosedAsync(IPage page, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                if (await FindEditAddressModalAsync(page).ConfigureAwait(false) is null)
+                {
+                    return true;
+                }
+
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return false;
+        }
+
+        /// <summary>Tìm modal "Sửa Địa chỉ" hiện có: <c>.eds-modal__box</c> có <c>.title</c> khớp
+        /// <see cref="ShopeeShippingNav.IsEditAddressModalTitle"/>. Không có → <c>null</c> (không ném).</summary>
+        private static async Task<IElementHandle?> FindEditAddressModalAsync(IPage page)
+        {
+            try
+            {
+                var boxes = await page.QuerySelectorAllAsync(".eds-modal__box").ConfigureAwait(false);
+                foreach (var box in boxes)
+                {
+                    var title = await box.QuerySelectorAsync(".title").ConfigureAwait(false);
+                    if (title is null)
+                    {
+                        continue;
+                    }
+
+                    if (ShopeeShippingNav.IsEditAddressModalTitle(await title.InnerTextAsync().ConfigureAwait(false)))
+                    {
+                        return box;
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Bấm nút "Hủy" của modal kiểu người (best-effort) rồi chờ modal đóng — dùng ở các nhánh thoát an
+        /// toàn (không ghi gì lên shop). Trả về vị trí chuột mới.
+        /// </summary>
+        private static async Task<(double X, double Y)> HumanCancelModalAsync(
+            IPage page, IElementHandle modal, double mx, double my, Random rng, CancellationToken ct)
+        {
+            var cancel = await FindCancelButtonAsync(modal).ConfigureAwait(false);
+            if (cancel is not null)
+            {
+                (mx, my, _) = await TryHumanClickVisibleAsync(page, cancel, mx, my, rng, ct).ConfigureAwait(false);
+            }
+
+            await WaitEditAddressModalClosedAsync(page, 10000, ct).ConfigureAwait(false);
+            return (mx, my);
+        }
+
+        /// <summary>
+        /// Click kiểu người NHƯNG chỉ khi phần tử đang hiển thị (<c>BoundingBoxAsync() != null</c>): scroll
+        /// vào tầm nhìn trước, box vẫn null → KHÔNG click (tránh <see cref="HumanMoveAndClickAsync"/> nhấn
+        /// tại vị trí chuột cũ) và trả <c>Clicked=false</c>. Trả về vị trí chuột mới + đã click hay chưa.
+        /// </summary>
+        private static async Task<(double X, double Y, bool Clicked)> TryHumanClickVisibleAsync(
+            IPage page, IElementHandle el, double mx, double my, Random rng, CancellationToken ct)
+        {
+            try { await el.ScrollIntoViewIfNeededAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
+
+            if (await el.BoundingBoxAsync().ConfigureAwait(false) is null)
+            {
+                try { await el.ScrollIntoViewIfNeededAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
+                if (await el.BoundingBoxAsync().ConfigureAwait(false) is null)
+                {
+                    return (mx, my, false);
+                }
+            }
+
+            (mx, my) = await HumanMoveAndClickAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
+            return (mx, my, true);
         }
 
         public async ValueTask DisposeAsync()
