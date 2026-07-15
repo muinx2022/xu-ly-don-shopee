@@ -1,9 +1,12 @@
 # Plan: Sửa lỗi không tick được ô "Đặt làm địa chỉ lấy hàng" (handle stale + modal để mở)
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable tự chạy build (0/0, `-p:Deterministic=false`) + `dotnet test` (**279/279 pass**);
+  đọc toàn bộ diff 3 file đối chiếu đặc tả; chạy panel rà soát đối kháng (3 góc nhìn × phản biện 2/3
+  phiếu) → **0 lỗi thật** (1 nghi vấn mức thấp về cửa sổ hủy giữa "modal mở" và khối try bị bác 3/3 vì
+  chỉ xảy ra khi phiên đang bị Dừng, modal treo tạm vô hại). Đạt.
 
 ## 1. Bối cảnh & lỗi thực tế
 
@@ -219,6 +222,82 @@ Tuyệt đối không native check/dispatch.
 
 ---
 
-## Báo cáo thực thi (Opus điền sau khi xong)
+## Báo cáo thực thi (Opus điền — 2026-07-15)
 
-(để trống)
+### Baseline trước khi sửa
+- `dotnet build XuLyDonShopee.sln -c Debug -p:Deterministic=false` → **Build succeeded, 0 Warning, 0 Error**.
+- `dotnet test --no-build` → **Passed! Failed: 0, Passed: 279, Skipped: 0** (đúng nền 279).
+
+### Đã hoàn thành (từng bước)
+
+**Bước 1 — Enum kết quả (file mới)**
+- Tạo `src/XuLyDonShopee.Core/Services/SetPickupResult.cs` với enum `SetPickupResult` gồm 7 giá trị
+  (`Ok, Failed, AddressNotFound, EditModalNotOpened, CheckboxNotFound, CheckboxClickFailed, SaveFailed`) —
+  đúng nguyên văn plan, XML-doc tiếng Việt.
+
+**Bước 2 — `SetPickupAddressAsync` đổi trả về + chống stale + luôn-Hủy-khi-lỗi**
+(`src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`)
+- Interface `ILoginSession.SetPickupAddressAsync`: đổi `Task<bool>` → `Task<SetPickupResult>`, cập nhật
+  XML-doc liệt kê từng nhánh enum.
+- Viết lại thân `LoginSession.SetPickupAddressAsync`:
+  - Các nhánh sớm trả enum: page null/catch ngoài → `Failed`; không thấy địa chỉ → `AddressNotFound`; đã có
+    tag lấy hàng → `Ok`; nút Sửa không thấy / click Sửa không ăn / modal không mở → `EditModalNotOpened`.
+  - Khối checkbox (bước 5) bọc trong `try { … } finally { … }`: biến `result` (mặc định `Failed`); mọi nhánh
+    set `result` rồi `return result`. `finally` — nếu `result != Ok` thì **re-find modal tươi** qua
+    `FindEditAddressModalAsync(page)`, còn mở thì `HumanCancelModalAsync` (best-effort, nuốt lỗi) → chốt chặn
+    "không bao giờ để modal treo", kể cả khi exception rơi lên catch ngoài (catch ngoài chạy SAU finally).
+  - Luồng checkbox: (5a) `WaitPickupCheckboxStableAsync` chờ thấy label **2 lần liên tiếp** cách ~400ms,
+    deadline 8s → không thấy = `CheckboxNotFound`; (5b) `IsPickupCheckedAsync == true` → Hủy inline + `Ok`;
+    (5c) vòng tick tối đa 3 lần: re-query text span tươi → `TryHumanClickVisibleAsync` → chờ 300–900ms → đọc
+    lại bằng DOM sống, hết 3 lần chưa tick = `CheckboxClickFailed`; (6) Lưu: nút không thấy / click không ăn /
+    modal không đóng sau 15s = `SaveFailed`, đóng được = `Ok`.
+  - Helper mới thay `FindPickupCheckboxAsync` (đã xóa vì thành dead code):
+    `FindPickupCheckboxLabelAsync(modal)` (label tươi mỗi lần gọi), `IsPickupCheckedAsync(modal)` → `bool?`
+    (re-query label tươi rồi `label.EvaluateAsync<bool>("l => l.querySelector('input.eds-checkbox__input')?.checked === true")`
+    — đọc DOM sống, nuốt lỗi → null), `FindPickupClickTargetAsync(modal)` → `span.eds-checkbox__label` (mục
+    tiêu click), `WaitPickupCheckboxStableAsync(modal, timeoutMs, ct)`.
+  - Bọc `BoundingBoxAsync()` bằng try: trong `HumanMoveToAsync` (khai báo `ElementHandleBoundingBoxResult? box`
+    trong try/catch → null khi detached) và trong `TryHumanClickVisibleAsync` (qua helper mới
+    `HasBoundingBoxAsync` — try/catch → false khi detached). Đây là điểm khiến exception rò lên catch ngoài
+    trước đây; nay lỗi handle biến thành "không click được" graceful.
+
+**Bước 3 — `AccountSession.ProcessOrdersAsync` báo đúng bước lỗi**
+(`src/XuLyDonShopee.App/Services/AccountSession.cs`)
+- Thay `okPickup` bằng `pick` + `switch` trên `SetPickupResult` sinh StatusText phân biệt: địa chỉ không thấy /
+  không sửa được / không thấy ô / không tick được / chưa Lưu được / mặc định. `return pick == SetPickupResult.Ok`.
+  File đã sẵn `using XuLyDonShopee.Core.Services;`.
+
+**Bước 4 — like-human**: click checkbox (text span), Lưu, Hủy, Sửa đều qua `TryHumanClickVisibleAsync` →
+`HumanMoveAndClickVerifiedAsync` (chuột cong, hit-test, down→trễ→up). Không thêm thao tác máy.
+
+**Bước 5 — test/build**: không viết test hình thức cho enum (không có logic thuần parse — như plan cho phép).
+
+### Kết quả kiểm chứng (số liệu thật)
+- `dotnet build XuLyDonShopee.sln -c Debug -p:Deterministic=false` → **Build succeeded, 0 Warning, 0 Error**.
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build` → **Passed! Failed: 0, Passed: 279, Skipped: 0**
+  (không đỏ nền 279).
+- Grep API máy bị cấm trong `ShopeeLoginService.cs` (`.ClickAsync(`, `.FillAsync(`, `Mouse.ClickAsync(`,
+  `.CheckAsync(`, `.DispatchEventAsync(`, `input.check(`) → **No matches**.
+- Grep xác nhận không còn `IsCheckedAsync` (đọc handle cũ) và không còn `FindPickupCheckboxAsync` cũ.
+- `git status` → đúng 3 file: `ShopeeLoginService.cs` (M), `AccountSession.cs` (M), `SetPickupResult.cs` (mới).
+
+### Đối chiếu tiêu chí nghiệm thu mục 4
+- [x] Re-query tươi checkbox trước mỗi lần dùng; đọc tick bằng JS eval trên phần tử vừa query.
+- [x] `BoundingBoxAsync` bọc try trong cả `HumanMoveToAsync` và `TryHumanClickVisibleAsync` → detached
+      graceful, không ném lên catch ngoài.
+- [x] Mọi nhánh thất bại đều Hủy modal qua `finally` (chốt chặn); nhánh "đã tick sẵn" Hủy inline.
+- [x] Click vào text span "Đặt làm địa chỉ lấy hàng"; tick tối đa 3 lần, kiểm lại bằng DOM sống.
+- [x] `ProcessOrdersAsync` báo StatusText phân biệt bước lỗi.
+- [x] Like-human giữ nguyên; không ClickAsync/FillAsync/native-check thẳng.
+- [x] Build 0/0; test 279 pass (không đỏ nền).
+- [x] Chỉ sửa 3 file trong plan.
+
+### Vướng mắc / lưu ý
+- **Kiểu trả về của `IElementHandle.BoundingBoxAsync()` là `ElementHandleBoundingBoxResult?`** (KHÔNG phải
+  `BoundingBox`) — plan không nêu tên kiểu; lần đầu khai báo nhầm `BoundingBox?` gây 7 lỗi CS0246/CS1061, đã
+  sửa đúng tên. Code cũ dùng `var` nên không lộ tên kiểu này.
+- **KHÔNG smoke live trên Shopee thật** (môi trường không có phiên đăng nhập) — chỉ build + test + đối chiếu
+  code, đúng ràng buộc. Cần người dùng bấm "Xử lý đơn" sau merge để xác nhận StatusText mới chỉ đúng bước hỏng.
+- Giả định `modal` (`.eds-modal__box`) là container ổn định (map re-render phần form bên trong, không thay
+  container) — các helper checkbox neo vào `modal` để re-query label tươi. Nếu Shopee thay cả container modal
+  thì các helper trả null → `CheckboxNotFound` + finally vẫn Hủy (graceful, không treo).

@@ -218,11 +218,23 @@ public partial class AccountSession : ObservableObject, IAccountSession
                 : acc!.PickupAddress!;
 
             StatusText = $"Đang chọn địa chỉ lấy hàng ({province})...";
-            var okPickup = await s.SetPickupAddressAsync(province, tok).ConfigureAwait(false);
-            StatusText = okPickup
-                ? $"Đã đặt địa chỉ lấy hàng: {province}."
-                : $"Không đặt được địa chỉ lấy hàng ({province}) — kiểm tra tay trong cửa sổ Brave.";
-            return okPickup;
+            var pick = await s.SetPickupAddressAsync(province, tok).ConfigureAwait(false);
+            StatusText = pick switch
+            {
+                SetPickupResult.Ok => $"Đã đặt địa chỉ lấy hàng: {province}.",
+                SetPickupResult.AddressNotFound =>
+                    $"Không thấy địa chỉ ở {province} trong danh sách — kiểm tra tay trong cửa sổ Brave.",
+                SetPickupResult.EditModalNotOpened =>
+                    $"Mở được danh sách nhưng không sửa được địa chỉ ({province}) — shop có thể bị khóa sửa, kiểm tra tay.",
+                SetPickupResult.CheckboxNotFound =>
+                    $"Mở được ô Sửa địa chỉ nhưng không thấy mục \"Đặt làm địa chỉ lấy hàng\" — kiểm tra tay trong Brave.",
+                SetPickupResult.CheckboxClickFailed =>
+                    $"Không tick được \"Đặt làm địa chỉ lấy hàng\" ({province}) — kiểm tra tay trong cửa sổ Brave.",
+                SetPickupResult.SaveFailed =>
+                    $"Đã tick nhưng chưa Lưu được địa chỉ lấy hàng ({province}) — kiểm tra tay trong cửa sổ Brave.",
+                _ => $"Không đặt được địa chỉ lấy hàng ({province}) — kiểm tra tay trong cửa sổ Brave.",
+            };
+            return pick == SetPickupResult.Ok;
         }
         catch (OperationCanceledException)
         {
