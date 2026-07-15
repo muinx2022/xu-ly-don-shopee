@@ -33,3 +33,6 @@ packages/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Ket qua publish cuc bo (workaround WDAC) - khong commit
+publish/

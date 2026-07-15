@@ -11,6 +11,13 @@ namespace XuLyDonShopee.Core.Services;
 /// "Brave is being controlled by automated test software" và <c>navigator.webdriver</c> giữ <c>false</c>
 /// — đỡ bị Shopee nhận diện là bot.
 /// </para>
+/// <para>
+/// GIỮ <c>--disable-blink-features=AutomationControlled</c> (và <c>AutomationControlled</c> trong
+/// <c>--disable-features</c>): KHÔNG được bỏ. Vì app luôn nối vào qua <c>--remote-debugging-port</c>
+/// (CDP), chính kết nối CDP khiến Blink bật cờ AutomationControlled → <c>navigator.webdriver</c> thành
+/// <c>true</c>. Cờ này ép webdriver về <c>false</c> (đã smoke xác nhận: bỏ cờ → webdriver=true). Đánh đổi:
+/// cờ gây thanh vàng "unsupported command-line flag", nhưng chống nhận diện bot quan trọng hơn.
+/// </para>
 /// </summary>
 public static class BraveLaunchArgs
 {
@@ -29,12 +36,17 @@ public static class BraveLaunchArgs
         {
             $"--remote-debugging-port={remoteDebuggingPort}",
             $"--user-data-dir={userDataDir}",
-            // Chống nhận diện tự động hóa: tắt cờ AutomationControlled của Blink.
+            // Chống nhận diện tự động hóa: tắt cờ AutomationControlled của Blink. BẮT BUỘC giữ — vì nối
+            // CDP (--remote-debugging-port) làm Blink bật cờ này khiến navigator.webdriver=true; cờ dưới
+            // ép webdriver về false (smoke đã xác nhận). Đánh đổi: có thanh "unsupported command-line flag".
             "--disable-blink-features=AutomationControlled",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-features=Translate,AutomationControlled",
-            "--start-maximized",
+            // Mở cửa sổ Brave ở kích thước THƯỜNG (không --start-maximized) theo yêu cầu người dùng.
+            // Locale tiếng Việt đặt bằng cờ trình duyệt (KHÔNG hook navigator.languages bằng JS —
+            // hook JS tự tạo dấu hiệu lộ bot).
+            "--lang=vi-VN",
         };
 
         if (proxy is not null)

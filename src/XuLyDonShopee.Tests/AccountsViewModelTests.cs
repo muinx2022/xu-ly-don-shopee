@@ -33,8 +33,8 @@ public class AccountsViewModelTests
 
         // Sau khi lưu: form về trạng thái sửa bình thường, bản ghi mới được chọn và hiển thị.
         Assert.False(vm.IsNew);
-        Assert.NotNull(vm.SelectedAccount);
-        Assert.Equal("xyz@mail.com", vm.SelectedAccount!.Email);
+        Assert.NotNull(vm.SelectedRow);
+        Assert.Equal("xyz@mail.com", vm.SelectedRow!.Email);
         Assert.Contains(vm.Accounts, a => a.Email == "xyz@mail.com");
         Assert.Null(vm.ErrorMessage);
         Assert.Equal(2, services.Accounts.GetAll().Count);
@@ -61,8 +61,8 @@ public class AccountsViewModelTests
         Assert.Null(vm.ErrorMessage);
         Assert.Single(services.Accounts.GetAll());
         Assert.Equal("shopee_user01", services.Accounts.GetAll().First().Email);
-        Assert.NotNull(vm.SelectedAccount);
-        Assert.Equal("shopee_user01", vm.SelectedAccount!.Email);
+        Assert.NotNull(vm.SelectedRow);
+        Assert.Equal("shopee_user01", vm.SelectedRow!.Email);
     }
 
     // ===== Phần 1: user rỗng vẫn phải báo lỗi và KHÔNG ghi DB =====
@@ -122,7 +122,7 @@ public class AccountsViewModelTests
         services.Accounts.Insert(new Account { Email = "keep@mail.com", Password = "orig" });
 
         var vm = new AccountsViewModel(services);
-        vm.SelectedAccount = vm.Accounts.First(a => a.Email == "keep@mail.com");
+        vm.SelectedRow = vm.Accounts.First(a => a.Email == "keep@mail.com");
         Assert.Equal("orig", vm.EditPassword);
 
         vm.EditPassword = "changed"; // sửa dở, chưa lưu
@@ -131,8 +131,8 @@ public class AccountsViewModelTests
 
         Assert.Equal("changed", vm.EditPassword); // KHÔNG bị nạp lại về "orig"
         Assert.True(vm.IsEditing);
-        Assert.NotNull(vm.SelectedAccount);
-        Assert.Equal("keep@mail.com", vm.SelectedAccount!.Email);
+        Assert.NotNull(vm.SelectedRow);
+        Assert.Equal("keep@mail.com", vm.SelectedRow!.Email);
     }
 
     // ===== Chọn sang tài khoản KHÁC vẫn phải nạp form của tài khoản đó (không hồi quy) =====
@@ -145,10 +145,10 @@ public class AccountsViewModelTests
         services.Accounts.Insert(new Account { Email = "b@mail.com", Password = "pb" });
 
         var vm = new AccountsViewModel(services);
-        vm.SelectedAccount = vm.Accounts.First(a => a.Email == "a@mail.com");
+        vm.SelectedRow = vm.Accounts.First(a => a.Email == "a@mail.com");
         Assert.Equal("pa", vm.EditPassword);
 
-        vm.SelectedAccount = vm.Accounts.First(a => a.Email == "b@mail.com");
+        vm.SelectedRow = vm.Accounts.First(a => a.Email == "b@mail.com");
         Assert.Equal("b@mail.com", vm.EditEmail);
         Assert.Equal("pb", vm.EditPassword);
     }
@@ -162,7 +162,7 @@ public class AccountsViewModelTests
         services.Accounts.Insert(new Account { Email = "c@mail.com", Password = "old" });
 
         var vm = new AccountsViewModel(services);
-        vm.SelectedAccount = vm.Accounts.First();
+        vm.SelectedRow = vm.Accounts.First();
         vm.EditPassword = "new";
         vm.EditStatus = AccountStatus.BiKhoa;
         vm.SaveCommand.Execute(null);
@@ -196,8 +196,8 @@ public class AccountsViewModelTests
         long aId = a.Id, bId = b.Id;
 
         // Bắt đầu luồng cho A (targetId = aId), rồi người dùng đổi chọn sang B giữa chừng.
-        vm.SelectedAccount = a;
-        vm.SelectedAccount = b; // _editingId giờ = bId
+        vm.SelectedRow = a;
+        vm.SelectedRow = b; // _editingId giờ = bId
 
         var json = SampleCookieJson();
         var result = vm.SaveCapturedCookie(aId, json);
@@ -221,7 +221,7 @@ public class AccountsViewModelTests
 
         var vm = new AccountsViewModel(services);
         long aId = vm.Accounts.First().Id;
-        vm.SelectedAccount = vm.Accounts.First();
+        vm.SelectedRow = vm.Accounts.First();
 
         // Người dùng bấm "+ Thêm" giữa chừng → _editingId = null.
         vm.AddCommand.Execute(null);
@@ -245,15 +245,15 @@ public class AccountsViewModelTests
 
         var vm = new AccountsViewModel(services);
         long aId = vm.Accounts.First(x => x.Email == "a@mail.com").Id;
-        vm.SelectedAccount = vm.Accounts.First(x => x.Email == "a@mail.com"); // đang mở A
+        vm.SelectedRow = vm.Accounts.First(x => x.Email == "a@mail.com"); // đang mở A
 
         var json = SampleCookieJson();
         var result = vm.SaveCapturedCookie(aId, json);
         Assert.Equal(AccountsViewModel.SaveCookieResult.Saved, result);
 
         // Chọn sang B rồi quay lại A từ danh sách hiển thị (instance trong Accounts).
-        vm.SelectedAccount = vm.Accounts.First(x => x.Email == "b@mail.com");
-        vm.SelectedAccount = vm.Accounts.First(x => x.Email == "a@mail.com");
+        vm.SelectedRow = vm.Accounts.First(x => x.Email == "b@mail.com");
+        vm.SelectedRow = vm.Accounts.First(x => x.Email == "a@mail.com");
 
         // Form hiển thị đúng cookie vừa lưu (Accounts đã được dựng lại với instance mới có cookie).
         Assert.Equal(json, vm.EditCookie);
@@ -274,13 +274,167 @@ public class AccountsViewModelTests
 
         var vm = new AccountsViewModel(services);
         long aId = vm.Accounts.First().Id;
-        vm.SelectedAccount = vm.Accounts.First();
+        vm.SelectedRow = vm.Accounts.First();
 
         var json = SampleCookieJson();
         vm.SaveCapturedCookie(aId, json);
 
         // Form cập nhật cookie ngay và instance trong danh sách cũng có cookie.
         Assert.Equal(json, vm.EditCookie);
-        Assert.Equal(json, vm.Accounts.First(x => x.Id == aId).Cookie);
+        Assert.Equal(json, vm.Accounts.First(x => x.Id == aId).Account.Cookie);
     }
+
+    // ===== Plan B: "Chọn toàn bộ" tick/bỏ hết theo danh sách đang hiển thị (toggle) =====
+    [Fact]
+    public void SelectAll_TickHetRoiBoHet_Toggle()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+        services.Accounts.Insert(new Account { Email = "b@mail.com", Password = "p" });
+        services.Accounts.Insert(new Account { Email = "c@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        Assert.Equal(3, vm.Accounts.Count);
+        Assert.All(vm.Accounts, r => Assert.False(r.IsSelected));
+
+        // Lần 1: chưa tick hết → tick hết.
+        vm.SelectAllCommand.Execute(null);
+        Assert.All(vm.Accounts, r => Assert.True(r.IsSelected));
+
+        // Lần 2: đã tick hết → bỏ tick hết.
+        vm.SelectAllCommand.Execute(null);
+        Assert.All(vm.Accounts, r => Assert.False(r.IsSelected));
+    }
+
+    // ===== "Chọn toàn bộ" khi mới tick một phần → phải tick HẾT (chưa đủ mới coi là "đã hết") =====
+    [Fact]
+    public void SelectAll_TickMotPhan_ThiTickHet()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+        services.Accounts.Insert(new Account { Email = "b@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        vm.Accounts.First().IsSelected = true; // mới tick 1 dòng
+
+        vm.SelectAllCommand.Execute(null);
+
+        Assert.All(vm.Accounts, r => Assert.True(r.IsSelected));
+    }
+
+    // ===== Plan B: bấm 1 tài khoản → nạp đúng form; KHÔNG đổi thứ tự danh sách (đã BỎ "nổi lên đầu"). =====
+    [Fact]
+    public void ChonRow_NapDungForm_KhongDoiThuTuList()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "pa" });
+        services.Accounts.Insert(new Account { Email = "b@mail.com", Password = "pb" });
+        services.Accounts.Insert(new Account { Email = "c@mail.com", Password = "pc" });
+
+        var vm = new AccountsViewModel(services);
+
+        // Chọn dòng CUỐI (c) → nạp form của c, và danh sách GIỮ NGUYÊN thứ tự (c KHÔNG nhảy lên đầu).
+        var third = vm.Accounts.First(r => r.Email == "c@mail.com");
+        vm.SelectedRow = third;
+
+        Assert.Same(third, vm.SelectedRow);
+        Assert.Equal("c@mail.com", vm.EditEmail);    // form nạp đúng tài khoản vừa chọn
+        Assert.Equal("pc", vm.EditPassword);
+        // KHÔNG đổi thứ tự: a vẫn ở đầu, c vẫn ở cuối.
+        Assert.Equal("a@mail.com", vm.Accounts[0].Email);
+        Assert.Equal("c@mail.com", vm.Accounts[2].Email);
+    }
+
+    // ===== "Nổi lên đầu" khi đang sửa dở đúng tài khoản đó KHÔNG nạp đè form (giữ dữ liệu chưa lưu) =====
+    [Fact]
+    public void ChonLaiRowDangSuaDo_KhongNapDeForm()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "pa" });
+        services.Accounts.Insert(new Account { Email = "b@mail.com", Password = "pb" });
+
+        var vm = new AccountsViewModel(services);
+        var rowB = vm.Accounts.First(r => r.Email == "b@mail.com");
+        vm.SelectedRow = rowB;
+        vm.EditPassword = "changed"; // sửa dở, chưa lưu
+
+        // Chọn lại CHÍNH dòng đang sửa (cùng Id) → không nạp đè, giữ "changed".
+        vm.SelectedRow = vm.Accounts.First(r => r.Id == rowB.Id);
+
+        Assert.Equal("changed", vm.EditPassword);
+    }
+
+    // ===== "Chọn toàn bộ" chỉ áp trên danh sách ĐANG LỌC (dòng bị ẩn không bị tick) =====
+    [Fact]
+    public void SelectAll_ChiApTrenDanhSachDangLoc()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "abc@mail.com", Password = "p" });
+        services.Accounts.Insert(new Account { Email = "xyz@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        vm.SearchText = "abc"; // chỉ còn abc hiển thị
+        Assert.Single(vm.Accounts);
+
+        vm.SelectAllCommand.Execute(null);
+        Assert.True(vm.Accounts.Single().IsSelected);
+
+        // Bỏ lọc → xyz xuất hiện nhưng KHÔNG bị tick (chỉ tick dòng đang hiển thị lúc nãy).
+        vm.SearchText = string.Empty;
+        Assert.False(vm.Accounts.First(r => r.Email == "xyz@mail.com").IsSelected);
+    }
+
+    // ===== LỖI 1: phiên lưu cookie (dựng lại danh sách) KHÔNG được xóa tick "đã chọn" khi đang chạy =====
+    [Fact]
+    public void LuuCookie_KhiDangChay_KhongMatTickChon()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "pa" });
+        services.Accounts.Insert(new Account { Email = "b@mail.com", Password = "pb" });
+
+        var vm = new AccountsViewModel(services);
+        long aId = vm.Accounts.First(r => r.Email == "a@mail.com").Id;
+
+        // Tick cả 2 (mô phỏng "Chạy đã chọn" 2 phiên).
+        foreach (var r in vm.Accounts)
+        {
+            r.IsSelected = true;
+        }
+
+        // Một phiên lưu cookie xong → dựng lại danh sách (mô phỏng luồng CookieSaved gây rebuild).
+        var result = vm.SaveCapturedCookie(aId, SampleCookieJson());
+        Assert.Equal(AccountsViewModel.SaveCookieResult.Saved, result);
+
+        // Tick KHÔNG bị mất → "Dừng đã chọn" vẫn thấy đủ 2 dòng.
+        Assert.All(vm.Accounts, r => Assert.True(r.IsSelected));
+        Assert.Equal(2, vm.Accounts.Count(r => r.IsSelected));
+    }
+
+    // ===== SỬA B: tick còn nguyên khi lọc ẩn dòng rồi bỏ lọc (dòng ẩn vẫn giữ tick) =====
+    [Fact]
+    public void TimKiem_RoiXoa_GiuTickChon()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "abc@mail.com", Password = "p" });
+        services.Accounts.Insert(new Account { Email = "xyz@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        vm.Accounts.First(r => r.Email == "abc@mail.com").IsSelected = true;
+
+        // Lọc ẩn abc (chỉ còn xyz), rồi xóa từ khóa.
+        vm.SearchText = "xyz";
+        Assert.DoesNotContain(vm.Accounts, r => r.Email == "abc@mail.com");
+        vm.SearchText = string.Empty;
+
+        // abc xuất hiện lại và VẪN được tick.
+        Assert.True(vm.Accounts.First(r => r.Email == "abc@mail.com").IsSelected);
+    }
+
 }

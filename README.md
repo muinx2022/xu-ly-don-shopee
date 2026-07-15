@@ -13,18 +13,52 @@ bằng **SQLite** cục bộ (không cần server).
   định tuyến qua proxy nếu có. App **tự khởi chạy Brave thật** (không có Brave thì dùng Chromium đóng
   gói của Playwright) rồi **nối vào qua CDP** (`--remote-debugging-port`), thay vì để Playwright tự
   launch. Nhờ vậy **không hiện thanh "controlled by automated test software"** và giữ
-  `navigator.webdriver = false` — cùng một init script "stealth" vá thêm các dấu hiệu bot khác
-  (plugins, languages, window.chrome, WebGL…) để **đỡ bị Shopee nhận diện là bot**.
-  Người dùng **tự đăng nhập** (Shopee yêu cầu mật khẩu + OTP/captcha nên app không tự điền được);
-  app **tự động bắt & lưu cookie khi bạn đóng cửa sổ** (không hỏi nữa) vào trường **Cookie** của
-  đúng tài khoản đó. Vì mở bằng profile riêng lưu tại `%APPDATA%\XuLyDonShopee\profiles\<id>` nên
-  **lần sau mở lại vẫn còn đăng nhập**.
+  `navigator.webdriver = false` một cách **tự nhiên** (Brave thật vốn đã sạch — plugins/WebGL/chrome
+  thật) nên **đỡ bị Shopee nhận diện là bot**. App **không** chồng thêm init script vá JS (vá lại tự
+  tạo dấu hiệu lộ bot); chống nhận diện dựa vào **trình duyệt thật + hành vi kiểu người** (bên dưới).
+  App **tự đăng nhập kiểu người**: khi trang hiện form đăng nhập Shopee, app **tự gõ user + mật khẩu**
+  (gõ **từng ký tự** với nhịp trễ ngẫu nhiên, thỉnh thoảng ngập ngừng) và **di chuột theo đường cong**
+  tới ô/nút rồi bấm đăng nhập — chỉ **dừng ở captcha/OTP** để bạn tự xử lý. Nếu **đã đăng nhập sẵn**
+  hoặc **không tìm thấy ô đăng nhập** (Shopee đổi giao diện/selector) thì app **bỏ qua để bạn tự nhập
+  tay** (không báo lỗi). Sau đó app **tự động bắt & lưu cookie khi bạn đóng cửa sổ** (không hỏi nữa) vào
+  trường **Cookie** của đúng tài khoản đó — dù đăng nhập do app điền hay do bạn tự làm captcha xong. Vì
+  mở bằng profile riêng lưu tại `%APPDATA%\XuLyDonShopee\profiles\<id>` nên **lần sau mở lại vẫn còn
+  đăng nhập**.
+
+  > **Mở nhiều tài khoản song song:** mỗi tài khoản chạy **một phiên độc lập** (Brave + profile + proxy +
+  > theo dõi đơn riêng, CDP port riêng) nên có thể **mở/theo dõi nhiều shop cùng lúc**. Mở tài khoản này
+  > **không khóa** nút "Mở trang bán hàng" của tài khoản khác; **đóng cửa sổ** một tài khoản **không ảnh
+  > hưởng** tài khoản khác; **thoát app** sẽ đóng sạch mọi cửa sổ Brave (không để tiến trình mồ côi). Có
+  > thêm nút **"Dừng"** để dừng phiên của tài khoản đang chọn.
+  >
+  > **Chọn nhiều & chạy nhóm (dành cho nhiều shop):** mỗi dòng trong danh sách tài khoản có **ô tick**;
+  > phía trên danh sách có các nút **"Chọn toàn bộ"** (tick/bỏ tick hết theo danh sách đang lọc),
+  > **"Chạy đã chọn"** (mở phiên cho mọi tài khoản đang tick — nhiều Brave song song), **"Dừng đã chọn"**
+  > và **"Dừng tất cả"**. Mỗi dòng còn hiển thị **live** một **chấm xanh "đang chạy"** và số **"Chờ lấy:
+  > N"** đọc từ phiên tương ứng, để theo dõi nhiều shop cùng lúc mà không cần mở từng form. **Bấm vào một
+  > tài khoản** sẽ **đưa dòng đó lên đầu danh sách** và **đưa cửa sổ Brave** của nó (nếu đang chạy)
+  > **ra trước** (focus) — tiện nhảy nhanh giữa nhiều cửa sổ shop. (Focus cửa sổ chỉ hỗ trợ Windows và là
+  > best-effort — nếu không đưa ra trước được thì bỏ qua, không ảnh hưởng luồng.)
+  >
+  > ⚠️ **Nhiều Brave rất tốn RAM/CPU:** mỗi phiên là một trình duyệt thật — mở ~15 shop cùng lúc là **rất
+  > nặng**. Hãy cân nhắc số lượng phiên phù hợp với cấu hình máy.
+- **Theo dõi đơn "Chờ Lấy Hàng"**: sau khi mở & đăng nhập, trong lúc cửa sổ trình duyệt còn mở, app
+  **tự theo dõi số "Chờ Lấy Hàng"** trong to-do box của Seller Centre: cứ **30 phút** **reload lại
+  trang** rồi đọc số, hiển thị ngay trên form (dòng "Chờ Lấy Hàng: …"). Nếu **= 0** thì kiểm lại sau
+  30'; nếu **> 0** thì (bước này) **chỉ báo số đơn** và **vẫn tiếp tục theo dõi mỗi 30'** — phần **xử
+  lý đơn tự động** sẽ làm ở bước sau. **Đóng cửa sổ để dừng** theo dõi. (Trước khi đăng nhập xong, app
+  chưa reload — chờ bạn đăng nhập/qua captcha rồi mới bắt đầu đọc.)
 
   > **Lưu ý anti-bot:** cơ chế trên là **best-effort**, KHÔNG đảm bảo 100% né được hệ thống chống bot
   > của Shopee (họ vẫn có thể dò CDP, fingerprint, hành vi gõ/di chuột, và IP). Proxy được đặt qua
   > `--proxy-server`; proxy có user:pass thì xác thực **qua CDP** (không hiện hộp thoại đăng nhập proxy).
   > Với KiotProxy, app **giữ IP ổn định**: luôn ưu tiên proxy hiện tại (`/current`), chỉ xin IP mới
   > (`/new`) khi chưa có — tránh xoay IP liên tục.
+- **Proxy riêng cho từng tài khoản**: trong form chi tiết tài khoản có ô **"Proxy — API key KiotProxy"**.
+  Dán **API key KiotProxy riêng** vào đây thì khi mở trang bán hàng, tài khoản đó dùng **đúng key này**
+  lấy proxy sticky (`/current`) → **mỗi tài khoản một IP ổn định riêng**. Thứ tự ưu tiên chọn proxy khi
+  mở: (1) **key riêng của tài khoản** → (2) danh sách proxy thủ công (round-robin) → (3) danh sách API
+  key KiotProxy **chung** trong Cài đặt → (4) IP máy. Để trống ô này = dùng cấu hình chung / IP máy.
 - **Quản lý proxy**: dán danh sách proxy (`host:port` hoặc `host:port:user:pass`), hiển thị bảng,
   xóa dòng/xóa tất cả.
 - **Cài đặt**: nhập/lưu **danh sách** API key KiotProxy (mỗi dòng một key).
@@ -50,8 +84,12 @@ bằng **SQLite** cục bộ (không cần server).
 > `%APPDATA%\XuLyDonShopee\profiles\<id>`, không dùng hồ sơ Brave thật của bạn) nên cookie/phiên đăng
 > nhập giữa các tài khoản không lẫn nhau, và **lần sau mở lại vẫn còn đăng nhập**.
 > Nút chỉ bật khi đang mở một tài khoản **đã lưu** (cần Id để biết ghi cookie vào đâu); tài khoản
-> mới phải Lưu trước. Việc đăng nhập là **thủ công**; app tự bắt cookie trong lúc cửa sổ mở và lưu
-> khi bạn đóng cửa sổ (không còn bấm *"Đồng ý"* để lưu như trước).
+> mới phải Lưu trước. App **tự đăng nhập kiểu người** (gõ + di chuột như người) bằng user/mật khẩu đã
+> lưu, dừng ở captcha/OTP; nếu Shopee đổi selector khiến app không thấy ô thì **bạn tự nhập tay**. App
+> tự bắt cookie trong lúc cửa sổ mở và lưu khi bạn đóng cửa sổ (không còn bấm *"Đồng ý"* để lưu như trước).
+>
+> **Lưu ý:** tự bấm đăng nhập có thể **dễ bị anti-bot soi hơn** thao tác tay, và cơ chế kiểu người
+> **không đảm bảo 100%** né được hệ thống chống bot của Shopee — đây là best-effort.
 
 ## Yêu cầu
 

@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     Phone      TEXT,
     Cookie     TEXT,
     Note       TEXT,
+    ProxyKey   TEXT,
     Status     TEXT NOT NULL,
     CreatedAt  TEXT NOT NULL,
     UpdatedAt  TEXT NOT NULL
@@ -83,5 +84,42 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT
 );";
         cmd.ExecuteNonQuery();
+
+        // Migration cho DB CŨ đã tồn tại: CREATE TABLE IF NOT EXISTS ở trên KHÔNG sửa bảng cũ, nên
+        // thêm cột ProxyKey bằng ALTER TABLE ADD COLUMN (không phá dữ liệu người dùng đang có).
+        EnsureColumn(conn, "accounts", "ProxyKey", "TEXT");
+    }
+
+    /// <summary>
+    /// Đảm bảo bảng <paramref name="table"/> có cột <paramref name="column"/>. Nếu chưa có (DB cũ) thì
+    /// <c>ALTER TABLE ... ADD COLUMN</c> — chỉ THÊM cột, KHÔNG đụng dữ liệu sẵn có. Idempotent: chạy
+    /// nhiều lần không lỗi (đã có cột thì bỏ qua). Tên bảng/cột/kiểu là hằng nội bộ nên nội suy an toàn.
+    /// </summary>
+    private static void EnsureColumn(SqliteConnection conn, string table, string column, string columnType)
+    {
+        // Đọc danh sách cột hiện có; cột "name" nằm ở chỉ số 1 của PRAGMA table_info.
+        var exists = false;
+        using (var pragma = conn.CreateCommand())
+        {
+            pragma.CommandText = $"PRAGMA table_info({table});";
+            using var reader = pragma.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+
+        if (exists)
+        {
+            return;
+        }
+
+        using var alter = conn.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {columnType};";
+        alter.ExecuteNonQuery();
     }
 }

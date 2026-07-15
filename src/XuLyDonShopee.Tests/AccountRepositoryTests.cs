@@ -73,6 +73,55 @@ public class AccountRepositoryTests
     }
 
     [Fact]
+    public void Insert_CoProxyKey_RoiGetById_TraVeProxyKey()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        var account = new Account { Email = "p@x.com", Password = "1", ProxyKey = "KIOT-KEY-123" };
+        var id = repo.Insert(account);
+
+        var loaded = repo.GetById(id);
+        Assert.NotNull(loaded);
+        Assert.Equal("KIOT-KEY-123", loaded!.ProxyKey);
+    }
+
+    [Fact]
+    public void Insert_KhongCoProxyKey_TraVeNull()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        var id = repo.Insert(new Account { Email = "q@x.com", Password = "1" });
+
+        var loaded = repo.GetById(id);
+        Assert.NotNull(loaded);
+        Assert.Null(loaded!.ProxyKey);
+    }
+
+    [Fact]
+    public void Update_ThayDoiProxyKey_LuuDung_VaXoaVeNull()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        var account = new Account { Email = "u@x.com", Password = "1" };
+        repo.Insert(account);
+
+        // Gán key mới → đọc lại đúng.
+        account.ProxyKey = "NEW-KEY";
+        repo.Update(account);
+        Assert.Equal("NEW-KEY", repo.GetById(account.Id)!.ProxyKey);
+
+        // Xóa key (null) → đọc lại null (không lẫn với trường khác — kiểm thứ tự cột SELECT/Map).
+        account.ProxyKey = null;
+        repo.Update(account);
+        var reloaded = repo.GetById(account.Id)!;
+        Assert.Null(reloaded.ProxyKey);
+        Assert.Equal("u@x.com", reloaded.Email); // các trường khác không bị lệch chỉ số
+    }
+
+    [Fact]
     public void Delete_XoaKhoiDb()
     {
         using var temp = new TempDatabase();

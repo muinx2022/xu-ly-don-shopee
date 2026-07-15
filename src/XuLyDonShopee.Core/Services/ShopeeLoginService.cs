@@ -19,6 +19,45 @@ public interface ILoginSession : IAsyncDisposable
 
     /// <summary>True nếu cửa sổ trình duyệt đã đóng.</summary>
     bool IsClosed { get; }
+
+    /// <summary>
+    /// Tiến trình Brave/Chromium mà phiên đang sở hữu. Dùng ở tầng App để (Plan B) đưa cửa sổ ra trước
+    /// (focus) và để kill dự phòng khi dừng phiên. Null nếu phiên không giữ tiến trình.
+    /// </summary>
+    Process? BraveProcess { get; }
+
+    /// <summary>
+    /// Số cửa sổ/tab (Pages) đang mở của phiên. Dùng làm tín hiệu "người dùng đã đóng hết cửa sổ"
+    /// đáng tin hơn "tiến trình Brave chết" (Brave có thể còn chạy nền). Trả 0 nếu context đã ngắt.
+    /// </summary>
+    int OpenPageCount { get; }
+
+    /// <summary>
+    /// <b>Tự đăng nhập kiểu người</b>: nếu trang đang hiển thị form đăng nhập Shopee thì dò ô user &amp;
+    /// password, di chuột theo <b>đường cong</b> (<see cref="HumanMouse"/>) tới từng ô rồi click, gõ
+    /// <b>từng ký tự có delay</b> (<see cref="HumanTyping"/>), cuối cùng bấm nút đăng nhập. KHÔNG xử lý
+    /// captcha/OTP (để người dùng tự làm).
+    /// <para>
+    /// <b>Graceful — không bao giờ ném:</b> nếu đã đăng nhập sẵn, hoặc không tìm thấy ô đăng nhập, hoặc
+    /// bất kỳ lỗi nào xảy ra → trả <c>false</c> (bỏ qua, để người dùng tự thao tác tay). Trả <c>true</c>
+    /// khi đã điền được user &amp; password.
+    /// </para>
+    /// </summary>
+    Task<bool> TryHumanLoginAsync(string user, string password, CancellationToken ct = default);
+
+    /// <summary>
+    /// Đọc số đơn <b>"Chờ Lấy Hàng"</b> trong to-do box của trang bán hàng (Seller Centre).
+    /// <para>
+    /// <b>Gate:</b> chỉ đọc khi đã đăng nhập (to-do box chỉ có sau đăng nhập) — chưa đăng nhập → trả
+    /// <c>null</c> và KHÔNG reload (tránh phá thao tác đăng nhập/captcha của người dùng). Nếu
+    /// <paramref name="reload"/> = <c>true</c> thì reload lại trang trước khi đọc (lấy số mới nhất).
+    /// </para>
+    /// <para>
+    /// <b>Graceful — không bao giờ ném:</b> chưa đăng nhập, không tìm thấy ô (Shopee đổi selector), hoặc
+    /// bất kỳ lỗi nào → trả <c>null</c>. Trả về số đơn (≥ 0) khi đọc được.
+    /// </para>
+    /// </summary>
+    Task<int?> ReadToShipCountAsync(bool reload, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -28,9 +67,13 @@ public interface ILoginSession : IAsyncDisposable
 /// <para>
 /// Vì tự launch Brave như trình duyệt bình thường (KHÔNG để Playwright launch với cờ
 /// <c>--enable-automation</c>) nên KHÔNG hiện thanh "controlled by automated test software" và
-/// <c>navigator.webdriver</c> giữ <c>false</c>. Thêm một init script "stealth" vá các dấu hiệu bot
-/// khác (plugins, languages, window.chrome, WebGL...). <b>Không đảm bảo 100%</b> né được anti-bot của
-/// Shopee (CDP/fingerprint/hành vi/IP vẫn có thể bị dò) — đây là best-effort.
+/// <c>navigator.webdriver</c> giữ <c>false</c> — <b>do chính Brave thật</b>, không do vá JS.
+/// CHỦ ĐÍCH <b>không tiêm init script vá fingerprint</b> (plugins/WebGL/webdriver/window.chrome...) vì
+/// các vá đó lại <b>tự tạo dấu hiệu lộ bot</b> (own-property <c>navigator.webdriver</c>, hàm mất
+/// <c>"[native code]"</c>, plugin giả không phải <c>Plugin</c>). Dựa vào Brave thật vốn đã sạch
+/// (webdriver=false, plugins/window.chrome/WebGL thật) + hành vi kiểu người (Plan 2). Locale VN đặt qua
+/// cờ <c>--lang=vi-VN</c>. <b>Không đảm bảo 100%</b> né được anti-bot của Shopee (CDP/fingerprint/hành
+/// vi/IP vẫn có thể bị dò) — đây là best-effort.
 /// </para>
 /// <para>
 /// Ưu tiên mở <b>Brave</b> nếu đã cài trên máy; nếu không có Brave dùng <b>Chromium đóng gói</b> của
@@ -41,38 +84,6 @@ public class ShopeeLoginService
 {
     /// <summary>URL trang bán hàng (Shopee Seller Centre).</summary>
     public const string SellerUrl = "https://banhang.shopee.vn/";
-
-    /// <summary>
-    /// Init script "stealth" tiêm vào mọi trang TRƯỚC khi tài liệu chạy, vá các dấu hiệu tự động hóa
-    /// hay bị anti-bot dò. Brave thật (không cờ automation) vốn đã đặt <c>navigator.webdriver=false</c>;
-    /// script này là lớp bảo hiểm + vá thêm plugins/languages/window.chrome/WebGL.
-    /// </summary>
-    private const string StealthJs = @"
-(() => {
-  try { Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', { get: () => false }); } catch (e) {}
-  try { Object.defineProperty(navigator, 'webdriver', { get: () => false }); } catch (e) {}
-  try { Object.defineProperty(navigator, 'languages', { get: () => ['vi-VN', 'vi', 'en-US', 'en'] }); } catch (e) {}
-  try { window.chrome = window.chrome || { runtime: {} }; } catch (e) {}
-  try {
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, 'mimeTypes', { get: () => [1, 2] });
-  } catch (e) {}
-  try {
-    const originalQuery = navigator.permissions.query.bind(navigator.permissions);
-    navigator.permissions.query = (parameters) =>
-      parameters && parameters.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission })
-        : originalQuery(parameters);
-  } catch (e) {}
-  try {
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function (parameter) {
-      if (parameter === 37445) return 'Intel Inc.';           // UNMASKED_VENDOR_WEBGL
-      if (parameter === 37446) return 'Intel Iris OpenGL Engine'; // UNMASKED_RENDERER_WEBGL
-      return getParameter.call(this, parameter);
-    };
-  } catch (e) {}
-})();";
 
     /// <summary>
     /// Đảm bảo có sẵn trình duyệt để mở. Nếu máy đã có <b>Brave</b> thì trả về ngay (0) mà
@@ -170,8 +181,9 @@ public class ShopeeLoginService
                 ? browser.Contexts[0]
                 : await browser.NewContextAsync().ConfigureAwait(false);
 
-            // Tiêm init script stealth TRƯỚC khi điều hướng.
-            await context.AddInitScriptAsync(StealthJs).ConfigureAwait(false);
+            // CHỦ ĐÍCH KHÔNG tiêm init script vá fingerprint: Brave thật đã sạch (webdriver=false,
+            // plugins/window.chrome/WebGL thật), vá lại chỉ tự tạo dấu hiệu lộ bot. Locale VN đặt qua
+            // cờ --lang=vi-VN trong BraveLaunchArgs.
 
             var page = context.Pages.Count > 0
                 ? context.Pages[0]
@@ -433,6 +445,197 @@ public class ShopeeLoginService
 
         public bool IsClosed => _closedTcs.Task.IsCompleted;
 
+        public Process? BraveProcess => _process;
+
+        public int OpenPageCount
+        {
+            get
+            {
+                // Context đã ngắt (browser chết) → coi như không còn cửa sổ.
+                try { return _context.Pages.Count; }
+                catch { return 0; }
+            }
+        }
+
+        // Selector ô đăng nhập Shopee (thử theo thứ tự; selector Shopee CÓ THỂ ĐỔI → luôn có fallback,
+        // không thấy gì thì bỏ qua để người dùng tự nhập tay).
+        private static readonly string[] UserSelectors =
+        {
+            "input[name='loginKey']",       // ô user chính của Shopee
+            "input[type='text']",           // fallback: ô text đầu tiên
+            "input[type='email']",
+            "input[type='tel']",
+        };
+
+        private static readonly string[] PasswordSelectors =
+        {
+            "input[name='password']",       // ô mật khẩu chính
+            "input[type='password']",       // fallback theo type
+        };
+
+        private static readonly string[] SubmitSelectors =
+        {
+            "button[type='submit']",        // nút submit chính
+            "button:has-text('Đăng nhập')", // fallback: nút chứa chữ "Đăng nhập"
+            "button:has-text('ĐĂNG NHẬP')",
+        };
+
+        public async Task<bool> TryHumanLoginAsync(string user, string password, CancellationToken ct = default)
+        {
+            try
+            {
+                // 1) Đã đăng nhập sẵn (profile bền) → bỏ qua, không tự điền.
+                if (ShopeeLoginCookies.IsLoggedIn(await CaptureCookiesJsonAsync().ConfigureAwait(false)))
+                {
+                    return false;
+                }
+
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return false;
+                }
+
+                // 2) Dò ô đăng nhập (timeout ngắn). Không thấy → return false (người dùng tự nhập tay).
+                var userInput = await FindFirstVisibleAsync(page, UserSelectors, 5000, ct).ConfigureAwait(false);
+                if (userInput is null)
+                {
+                    return false;
+                }
+
+                var passInput = await FindFirstVisibleAsync(page, PasswordSelectors, 3000, ct).ConfigureAwait(false);
+                if (passInput is null)
+                {
+                    return false;
+                }
+
+                // Random tạo nội bộ — app dùng ngẫu nhiên thật (không cần seed).
+                var rng = new Random();
+
+                // Con trỏ chuột bắt đầu ở giữa viewport (đọc kích thước thật; null → mặc định 640x360).
+                var vp = page.ViewportSize;
+                double mx = vp is not null ? vp.Width / 2.0 : 640;
+                double my = vp is not null ? vp.Height / 2.0 : 360;
+
+                // 3) Điền user rồi password: di chuột cong + click + gõ từng ký tự có delay.
+                (mx, my) = await HumanFillAsync(page, userInput, user, mx, my, rng, ct).ConfigureAwait(false);
+                (mx, my) = await HumanFillAsync(page, passInput, password, mx, my, rng, ct).ConfigureAwait(false);
+
+                // 4) Bấm nút đăng nhập (nếu tìm thấy). KHÔNG xử lý captcha/OTP.
+                var submit = await FindFirstVisibleAsync(page, SubmitSelectors, 3000, ct).ConfigureAwait(false);
+                if (submit is not null)
+                {
+                    await HumanMoveAndClickAsync(page, submit, mx, my, rng, ct).ConfigureAwait(false);
+                }
+
+                return true;
+            }
+            catch
+            {
+                // Bất kỳ lỗi nào → bỏ qua, để người dùng tự thao tác (KHÔNG phá luồng).
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Dò phần tử đầu tiên <b>đang hiển thị</b> khớp một trong <paramref name="selectors"/> (thử lần
+        /// lượt), poll tới khi hết <paramref name="timeoutMs"/>. Trả <c>null</c> nếu không thấy. Nuốt lỗi
+        /// từng selector (selector có thể không hợp lệ trên trang hiện tại).
+        /// </summary>
+        private static async Task<IElementHandle?> FindFirstVisibleAsync(
+            IPage page, string[] selectors, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                foreach (var sel in selectors)
+                {
+                    try
+                    {
+                        var el = await page.QuerySelectorAsync(sel).ConfigureAwait(false);
+                        if (el is not null && await el.IsVisibleAsync().ConfigureAwait(false))
+                        {
+                            return el;
+                        }
+                    }
+                    catch
+                    {
+                        // Selector không dùng được trên trang này — thử selector kế.
+                    }
+                }
+                await Task.Delay(200, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>
+        /// Điền một ô kiểu người: di chuột cong tới ô + click, rồi gõ <b>từng ký tự</b> với delay ngẫu
+        /// nhiên (<see cref="HumanTyping.NextCharDelayMs"/>). Trả về vị trí chuột mới (tâm ô).
+        /// </summary>
+        private static async Task<(double X, double Y)> HumanFillAsync(
+            IPage page, IElementHandle el, string text, double mx, double my, Random rng, CancellationToken ct)
+        {
+            (mx, my) = await HumanMoveAndClickAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
+
+            foreach (var ch in text)
+            {
+                ct.ThrowIfCancellationRequested();
+                // Gõ TỪNG ký tự (KHÔNG fill/dán) + delay kiểu người.
+                await page.Keyboard.TypeAsync(ch.ToString()).ConfigureAwait(false);
+                await Task.Delay(HumanTyping.NextCharDelayMs(rng), ct).ConfigureAwait(false);
+            }
+
+            return (mx, my);
+        }
+
+        /// <summary>
+        /// Di chuột theo <b>đường cong</b> từ (<paramref name="mx"/>,<paramref name="my"/>) tới tâm ô
+        /// (+jitter nhỏ), tự <c>Mouse.MoveAsync</c> <b>từng điểm</b> (KHÔNG dùng <c>steps</c> lớn để đi
+        /// thẳng), rồi click kiểu người (down + trễ + up). Trả về vị trí chuột cuối (điểm đích).
+        /// </summary>
+        private static async Task<(double X, double Y)> HumanMoveAndClickAsync(
+            IPage page, IElementHandle el, double mx, double my, Random rng, CancellationToken ct)
+        {
+            var box = await el.BoundingBoxAsync().ConfigureAwait(false);
+
+            double tx, ty;
+            if (box is not null)
+            {
+                // Tâm ô + jitter nhỏ (không luôn nhấn đúng chính giữa).
+                tx = box.X + box.Width / 2.0 + (rng.NextDouble() - 0.5) * Math.Min(box.Width * 0.3, 20);
+                ty = box.Y + box.Height / 2.0 + (rng.NextDouble() - 0.5) * Math.Min(box.Height * 0.3, 8);
+            }
+            else
+            {
+                // Không lấy được bounding box → kéo phần tử vào tầm nhìn, giữ nguyên vị trí chuột.
+                try { await el.ScrollIntoViewIfNeededAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
+                tx = mx;
+                ty = my;
+            }
+
+            // Số điểm theo khoảng cách (đường dài → nhiều điểm), giới hạn [12, 60] cho mượt.
+            var dist = Math.Sqrt((tx - mx) * (tx - mx) + (ty - my) * (ty - my));
+            var steps = Math.Clamp((int)(dist / 8) + 10, 12, 60);
+
+            foreach (var (px, py) in HumanMouse.GeneratePath(mx, my, tx, ty, steps, rng))
+            {
+                ct.ThrowIfCancellationRequested();
+                // Đi TỪNG điểm (steps mặc định = 1) để đường thật sự cong theo path đã sinh.
+                await page.Mouse.MoveAsync((float)px, (float)py).ConfigureAwait(false);
+                await Task.Delay(rng.Next(5, 26), ct).ConfigureAwait(false); // 5–25ms giữa các điểm
+            }
+
+            // Click kiểu người: nhấn giữ một khoảng ngắn rồi nhả.
+            await page.Mouse.DownAsync().ConfigureAwait(false);
+            await Task.Delay(rng.Next(40, 121), ct).ConfigureAwait(false);
+            await page.Mouse.UpAsync().ConfigureAwait(false);
+
+            return (tx, ty);
+        }
+
         public async Task<string> CaptureCookiesJsonAsync()
         {
             // Không truyền URL = lấy tất cả cookie trong context.
@@ -451,6 +654,130 @@ public class ShopeeLoginService
                 .ToList();
 
             return CookieJson.Serialize(list);
+        }
+
+        // Selector to-do box của Seller Centre (thử theo thứ tự; Shopee CÓ THỂ ĐỔI → luôn có fallback,
+        // không thấy thì trả null, KHÔNG ném, KHÔNG phá phiên).
+        //   - Chính: duyệt các .to-do-box-item tìm cái có .item-desc == "Chờ Lấy Hàng" → đọc .item-title.
+        //   - Fallback theo href: a[href*='type=toship'][href*='to_process'] .item-title.
+        private const string ToShipItemSelector = ".to-do-box-item";
+        private const string ItemDescSelector = ".item-desc";
+        private const string ItemTitleSelector = ".item-title";
+        private const string ToShipHrefTitleSelector =
+            "a[href*='type=toship'][href*='to_process'] .item-title";
+        private const string ToShipDescText = "Chờ Lấy Hàng";
+
+        public async Task<int?> ReadToShipCountAsync(bool reload, CancellationToken ct = default)
+        {
+            try
+            {
+                // 1) Gate: chưa đăng nhập → to-do box chưa có → null (KHÔNG reload để không phá đăng nhập/captcha).
+                if (!ShopeeLoginCookies.IsLoggedIn(await CaptureCookiesJsonAsync().ConfigureAwait(false)))
+                {
+                    return null;
+                }
+
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return null;
+                }
+
+                // 2) Reload nếu cần (nuốt lỗi điều hướng — vẫn thử đọc DOM hiện có).
+                if (reload)
+                {
+                    try
+                    {
+                        await page.ReloadAsync(new PageReloadOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = 30000
+                        }).ConfigureAwait(false);
+                    }
+                    catch { /* bỏ qua lỗi reload/điều hướng */ }
+                }
+
+                // 3) Tìm ô "Chờ Lấy Hàng" (poll timeout ngắn), có fallback.
+                var titleText = await FindToShipTitleAsync(page, ct).ConfigureAwait(false);
+
+                // 4) Parse số (thuần, test được). Không thấy / không parse được → null.
+                return ShopeeDashboard.ParseToShipCount(titleText);
+            }
+            catch
+            {
+                // Bất kỳ lỗi nào (selector đổi, context ngắt...) → null, KHÔNG phá phiên.
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Dò text ô <c>item-title</c> của mục "Chờ Lấy Hàng" trong to-do box, poll tới khi hết
+        /// <c>~8s</c>. Thử lần lượt: (1) duyệt các <c>.to-do-box-item</c> tìm cái có <c>.item-desc</c>
+        /// khớp "Chờ Lấy Hàng"; (2) fallback theo href. Không thấy → <c>null</c> (không ném).
+        /// </summary>
+        private static async Task<string?> FindToShipTitleAsync(IPage page, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Cách 1: duyệt .to-do-box-item, khớp .item-desc == "Chờ Lấy Hàng" → đọc .item-title.
+                try
+                {
+                    var items = await page.QuerySelectorAllAsync(ToShipItemSelector).ConfigureAwait(false);
+                    foreach (var item in items)
+                    {
+                        var desc = await item.QuerySelectorAsync(ItemDescSelector).ConfigureAwait(false);
+                        if (desc is null)
+                        {
+                            continue;
+                        }
+
+                        var descText = await desc.InnerTextAsync().ConfigureAwait(false);
+                        if (!IsToShipDesc(descText))
+                        {
+                            continue;
+                        }
+
+                        var title = await item.QuerySelectorAsync(ItemTitleSelector).ConfigureAwait(false);
+                        if (title is not null)
+                        {
+                            return await title.InnerTextAsync().ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch { /* selector chưa render / không hợp lệ — thử fallback */ }
+
+                // Cách 2 (fallback theo href).
+                try
+                {
+                    var title = await page.QuerySelectorAsync(ToShipHrefTitleSelector).ConfigureAwait(false);
+                    if (title is not null)
+                    {
+                        return await title.InnerTextAsync().ConfigureAwait(false);
+                    }
+                }
+                catch { /* bỏ qua */ }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>So khớp text <c>.item-desc</c> với "Chờ Lấy Hàng" (chuẩn hóa khoảng trắng, không phân biệt hoa/thường).</summary>
+        private static bool IsToShipDesc(string? descText)
+        {
+            if (string.IsNullOrWhiteSpace(descText))
+            {
+                return false;
+            }
+
+            var normalized = string.Join(' ',
+                descText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return string.Equals(normalized, ToShipDescText, StringComparison.OrdinalIgnoreCase);
         }
 
         public async ValueTask DisposeAsync()

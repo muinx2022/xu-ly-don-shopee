@@ -1,9 +1,10 @@
 # Plan: Mở Brave qua CDP + chống nhận diện bot Shopee (hạ tầng)
 
 - **Ngày:** 2026-07-14
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 - **Ghi chú:** Đây là **Plan 1/2**. Plan 2 (`2026-07-14-tu-dang-nhap-kieu-nguoi.md`) sẽ xếp chồng: tự điền user+pass kiểu người + tự bấm đăng nhập. Plan này CHỈ làm hạ tầng CDP + stealth + proxy.
+- **Nghiệm thu:** Fable tự chạy build (0 error) + test (104/104) + panel rà soát đối kháng 3 góc; panel bắt 3 lỗi thật (treo nền, mất cookie phút chót, stealth tự lộ) — đã sửa & kiểm chứng lại. Hạn chế: vòng poll không có unit test riêng (kiểm bằng đọc code + smoke); proxy IP/auth chưa test với proxy sống; nhánh Chromium fallback chưa smoke.
 
 ## 1. Bối cảnh & mục tiêu
 
@@ -197,3 +198,37 @@ Sửa `LoginSession` để giữ: `IPlaywright`, `IBrowser` (CDP), `IBrowserCont
 - **Banner automation:** xác nhận gián tiếp qua `navigator.webdriver=false` + không truyền `--enable-automation` + userAgent không `HeadlessChrome` (không chụp UIAutomation).
 - **Nền tảng:** smoke chỉ chạy trên Windows với Brave thật; nhánh Chromium-đóng-gói fallback chưa smoke (chỉ dùng khi máy không có Brave).
 - Theo plan: **không đảm bảo 100% né anti-bot Shopee** (còn CDP/fingerprint/hành vi/IP). Đây là hạ tầng best-effort; Plan 2 (gõ kiểu người) bổ trợ.
+
+---
+
+## Vòng 2 — Sửa 3 lỗi từ panel rà soát đối kháng (2026-07-14)
+
+Hướng sửa chung: **không dựa vào "tiến trình Brave chết" làm tín hiệu kết thúc, mà dựa vào "không còn cửa sổ (Pages)"** — vì Brave có thể chạy nền sau khi đóng cửa sổ.
+
+### LỖI 1 [major] — Vòng poll treo vô hạn nếu Brave chạy nền → ĐÃ SỬA
+- Thêm `int OpenPageCount { get; }` vào `ILoginSession`; `LoginSession` trả `_context.Pages.Count` (try/catch → 0 nếu context ngắt). File: `ShopeeLoginService.cs`.
+- `AccountsViewModel.OpenSellerAsync`: vòng poll đổi thành `while (!session.IsClosed && DateTime.UtcNow < deadline)` với `deadline = UtcNow + 15 phút` (chốt chặn cứng, không bao giờ treo vĩnh viễn). Tín hiệu đóng chính = `OpenPageCount == 0` ở **2 vòng poll LIÊN TIẾP** (`zeroPageStreak >= 2` mới `break`) để tránh thoát nhầm lúc Pages chớp 0 khi chuyển trang. `await using` vẫn dispose → `Kill(entireProcessTree)` dọn cả Brave nền.
+
+### LỖI 2 [major] — Mất cookie + báo "Chưa thấy" sai khi đóng ngay sau đăng nhập → ĐÃ SỬA
+- Thêm **lần bắt cookie CHỐT** sau vòng lặp, TRƯỚC khi ra khỏi `await using` (try/catch): khi thoát vì hết cửa sổ, browser thường VẪN sống → bắt được cookie đăng nhập phút chót.
+- Sửa **thông báo** trung thực: nếu không lưu được → *"Chưa lưu được cookie vào tài khoản. Nếu bạn đã đăng nhập, phiên vẫn được giữ trong hồ sơ trình duyệt (lần sau mở lại vẫn còn đăng nhập)."* (KHÔNG còn khẳng định "chưa đăng nhập").
+- Sửa **BusyStatus**: *"Đã mở trình duyệt. Hãy đăng nhập — cookie sẽ tự lưu; xong thì đóng cửa sổ."* (bỏ nhấn mạnh "ĐÓNG cửa sổ để lưu").
+
+### LỖI 3 [minor, quan trọng với chống bot] — StealthJs tự lộ là bot → ĐÃ SỬA
+- **Bỏ hẳn `AddInitScriptAsync` + hằng `StealthJs`.** Đã gỡ toàn bộ vá tự lộ: ghi đè `navigator.plugins`/`mimeTypes` (plugin giả không phải `Plugin`), hook `WebGLRenderingContext.getParameter` + `navigator.permissions.query` (mất `"[native code]"`), `Object.defineProperty(navigator,'webdriver')` (tạo own-property = tell), `window.chrome=…`. Brave thật vốn đã sạch.
+- Locale VN chuyển sang cờ `--lang=vi-VN` trong `BuildBraveArgs` (thêm test `CoCoLocaleTiengViet`).
+- Cập nhật XML-doc của `ShopeeLoginService` cho khớp (không còn nói "init script vá plugins/WebGL").
+
+### Nghiệm thu lại — số liệu thật
+- **Build:** `dotnet build XuLyDonShopee.sln -c Debug` → **0 Warning, 0 Error** (đã dừng `XuLyDonShopee.App` + `brave` trước build; không dính WDAC/ISG).
+- **Test:** `dotnet test` → **104 pass / 0 fail** (trước sửa: 103; +1 = `BraveLaunchArgsTests.CoCoLocaleTiengViet`). Test cũ vẫn xanh.
+- **Smoke Brave thật (code mới):** `navigator.webdriver=False`; `navigator.hasOwnProperty('webdriver')=**False**` (không còn own-property); `navigator.languages[0]=vi-VN` (từ `--lang`, không hook JS); `navigator.plugins[0] instanceof Plugin = **True**` (plugin thật); `navigator.permissions.query` là **native** (`[native code]`, không bị hook); đóng cửa sổ → vòng poll thoát; `DisposeAsync` → **0 Brave mồ côi**.
+- **Kiểm thuật toán vòng poll (tất định, `FakeSession` điều khiển `OpenPageCount`, sao đúng vòng của ViewModel):**
+  - KB1 (Brave chạy nền, Pages 1,1,0,0): thoát vì **`OpenPageCount==0 x2`** — KHÔNG treo.
+  - KB1b (đăng nhập PHÚT CHÓT, browser còn sống): loop không kịp lưu (`savedInLoop=False`) nhưng **lần bắt cookie CHỐT lưu được** (`savedFinal=True`) — đúng mục tiêu LỖI 2.
+  - KB2 (browser chết khi đóng): thoát vì `CaptureThrow` — KHÔNG treo.
+  - Real smoke cũng xác nhận **DEADLINE 15 phút** là chốt chặn cứng (loop thoát ở deadline khi Pages kẹt >0, rồi dispose kill sạch).
+
+### Hạn chế còn lại (vòng 2)
+- Nhánh thoát `OpenPageCount==0 x2` khó tái hiện bằng Brave thật vì Chromium tự thoát khi đóng cửa sổ cuối (khi đó thoát qua `IsClosed`/`CaptureThrow`); nhánh Pages==0 phục vụ đúng ca "Brave chạy nền" — đã chứng minh tất định bằng `FakeSession` (vòng poll trong `OpenSellerAsync` gắn `DialogService`/services nên không unit-isolate được nếu không tách hàm; giữ inline đúng như chỉ dẫn).
+- Proxy IP thật / auth proxy qua CDP: vẫn chưa có proxy sống để nghiệm thu (như vòng 1).

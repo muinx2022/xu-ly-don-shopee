@@ -13,9 +13,20 @@ public class BraveLaunchArgsTests
     {
         var args = BraveLaunchArgs.BuildBraveArgs(@"C:\profiles\1", 9222, null);
 
+        // GIỮ cờ --disable-blink-features=AutomationControlled: smoke đã xác nhận bỏ cờ này thì
+        // navigator.webdriver=true (do nối CDP). Cờ ép webdriver về false — bắt buộc giữ.
         Assert.Contains("--disable-blink-features=AutomationControlled", args);
         Assert.Contains(@"--user-data-dir=C:\profiles\1", args);
         Assert.Contains("--remote-debugging-port=9222", args);
+    }
+
+    [Fact]
+    public void CoCoLocaleTiengViet()
+    {
+        // Locale VN đặt bằng cờ trình duyệt (không hook navigator.languages bằng JS để tránh lộ bot).
+        var args = BraveLaunchArgs.BuildBraveArgs("/tmp/p", 0, null);
+
+        Assert.Contains("--lang=vi-VN", args);
     }
 
     [Fact]

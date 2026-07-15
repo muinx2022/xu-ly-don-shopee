@@ -22,6 +22,9 @@ public class Account
     /// <summary>Ghi chú (tùy chọn).</summary>
     public string? Note { get; set; }
 
+    /// <summary>API key KiotProxy riêng của tài khoản (tùy chọn). Có → mở trang bán hàng dùng proxy sticky theo key này.</summary>
+    public string? ProxyKey { get; set; }
+
     /// <summary>Trạng thái tài khoản.</summary>
     public AccountStatus Status { get; set; } = AccountStatus.ChuaKiemTra;
 

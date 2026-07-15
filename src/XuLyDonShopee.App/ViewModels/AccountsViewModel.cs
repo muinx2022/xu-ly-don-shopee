@@ -18,22 +18,29 @@ namespace XuLyDonShopee.App.ViewModels;
 public partial class AccountsViewModel : ViewModelBase
 {
     private readonly AppServices _services;
-    private readonly ShopeeLoginService _loginService = new();
-    private readonly IProxyHealthChecker _healthChecker = new ProxyHealthChecker();
     private List<Account> _all = new();
     private bool _isRefreshing;
 
-    // Chỉ số round-robin BỀN cho proxy thủ công, giữ qua các lần mở trang bán hàng (không reset mỗi lần).
-    private int _manualProxyIndex;
+    /// <summary>Tập Id các tài khoản đang tick — nguồn BỀN để khôi phục tick khi danh sách dựng lại (search/
+    /// Save/đổi tab/phiên lưu cookie), kể cả dòng đang bị ẩn do lọc. Không dùng để chạy/dừng nhóm (hai lệnh
+    /// đó đọc trực tiếp <see cref="Accounts"/> đang hiển thị).</summary>
+    private readonly HashSet<long> _selectedIds = new();
 
     public AccountsViewModel(AppServices services)
     {
         _services = services;
+
+        // Nghe các phiên chạy nền để cập nhật nút/hiển thị theo TỪNG tài khoản (không còn cờ IsBusy toàn cục).
+        // Sự kiện có thể đến từ thread nền → handler marshal về UI thread trước khi đụng UI (xem RunOnUi).
+        _services.Sessions.Changed += OnSessionsChanged;
+        _services.Sessions.CookieSaved += OnSessionCookieSaved;
+
         Reload();
     }
 
-    /// <summary>Danh sách tài khoản đang hiển thị (sau khi lọc).</summary>
-    public ObservableCollection<Account> Accounts { get; } = new();
+    /// <summary>Danh sách tài khoản đang hiển thị (sau khi lọc). Mỗi phần tử là <see cref="AccountRowViewModel"/>
+    /// bọc <see cref="Account"/> + tick chọn + trạng thái phiên (chấm chạy / "Chờ lấy: N").</summary>
+    public ObservableCollection<AccountRowViewModel> Accounts { get; } = new();
 
     /// <summary>Các lựa chọn trạng thái cho ComboBox.</summary>
     public static AccountStatus[] StatusOptions { get; } =
@@ -46,8 +53,10 @@ public partial class AccountsViewModel : ViewModelBase
     [ObservableProperty]
     private string _searchText = string.Empty;
 
+    /// <summary>Dòng đang chọn trong danh sách (bọc <see cref="Account"/>). Chỗ nào cần bản ghi gốc thì đọc
+    /// <c>SelectedRow?.Account</c>.</summary>
     [ObservableProperty]
-    private Account? _selectedAccount;
+    private AccountRowViewModel? _selectedRow;
 
     [ObservableProperty]
     private bool _isEditing;
@@ -70,6 +79,10 @@ public partial class AccountsViewModel : ViewModelBase
     [ObservableProperty]
     private string _editNote = string.Empty;
 
+    /// <summary>API key KiotProxy riêng của tài khoản (để trống = dùng cấu hình chung / IP máy).</summary>
+    [ObservableProperty]
+    private string _editProxyKey = string.Empty;
+
     [ObservableProperty]
     private AccountStatus _editStatus = AccountStatus.ChuaKiemTra;
 
@@ -85,13 +98,13 @@ public partial class AccountsViewModel : ViewModelBase
     [ObservableProperty]
     private bool _showPassword;
 
-    /// <summary>Đang bận (đang mở/tải trình duyệt, bắt cookie...). Khóa nút "Mở trang bán hàng".</summary>
-    [ObservableProperty]
-    private bool _isBusy;
-
-    /// <summary>Dòng hướng dẫn/trạng thái hiển thị trong lúc mở trang bán hàng (null = ẩn).</summary>
+    /// <summary>Dòng hướng dẫn/trạng thái hiển thị (đổ từ phiên của tài khoản đang chọn; null = ẩn).</summary>
     [ObservableProperty]
     private string? _busyStatus;
+
+    /// <summary>Trạng thái theo dõi đơn "Chờ Lấy Hàng" (đổ từ phiên của tài khoản đang chọn; null = ẩn).</summary>
+    [ObservableProperty]
+    private string? _orderStatus;
 
     /// <summary>Panel phải hiện chữ mờ khi không ở chế độ xem/sửa.</summary>
     public bool ShowPlaceholder => !IsEditing;
@@ -101,11 +114,20 @@ public partial class AccountsViewModel : ViewModelBase
         ? "JSON · trống"
         : $"JSON · {System.Text.Encoding.UTF8.GetByteCount(EditCookie) / 1024.0:0.0} KB";
 
+    /// <summary>True nếu tài khoản đang có cookie đăng nhập — dùng để hiện trạng thái gọn ("đã có/chưa có")
+    /// thay cho ô hiển thị chuỗi cookie thô (đỡ dài form).</summary>
+    public bool HasCookie => !string.IsNullOrWhiteSpace(EditCookie);
+
     /// <summary>
-    /// Chỉ cho mở trang bán hàng khi đang xem/sửa một tài khoản đã lưu (có Id) và không đang bận.
-    /// Tài khoản mới chưa lưu (chưa có Id) không mở được vì chưa có nơi ghi cookie.
+    /// Chỉ cho mở trang bán hàng khi đang xem/sửa một tài khoản đã lưu (có Id) và tài khoản đó CHƯA có
+    /// phiên đang chạy. Kiểm theo TỪNG tài khoản (không còn cờ IsBusy toàn cục) → mở tài khoản này KHÔNG
+    /// khóa nút của tài khoản khác. Tài khoản mới chưa lưu (chưa có Id) không mở được vì chưa có nơi ghi cookie.
     /// </summary>
-    public bool CanOpenSeller => IsEditing && !IsNew && _editingId is not null && !IsBusy;
+    public bool CanOpenSeller => IsEditing && !IsNew && _editingId is not null
+                                 && !_services.Sessions.IsRunning(_editingId ?? -1);
+
+    /// <summary>Cho dừng khi tài khoản đang chọn có phiên đang chạy.</summary>
+    public bool CanStopSeller => _editingId is not null && _services.Sessions.IsRunning(_editingId ?? -1);
 
     /// <summary>Id của tài khoản đang được nạp trong form (null = form trống / tạo mới).</summary>
     private long? _editingId;
@@ -114,13 +136,20 @@ public partial class AccountsViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(ShowPlaceholder));
         OnPropertyChanged(nameof(CanOpenSeller));
+        OnPropertyChanged(nameof(CanStopSeller));
     }
 
-    partial void OnIsNewChanged(bool value) => OnPropertyChanged(nameof(CanOpenSeller));
+    partial void OnIsNewChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanOpenSeller));
+        OnPropertyChanged(nameof(CanStopSeller));
+    }
 
-    partial void OnIsBusyChanged(bool value) => OnPropertyChanged(nameof(CanOpenSeller));
-
-    partial void OnEditCookieChanged(string value) => OnPropertyChanged(nameof(CookieSizeText));
+    partial void OnEditCookieChanged(string value)
+    {
+        OnPropertyChanged(nameof(CookieSizeText));
+        OnPropertyChanged(nameof(HasCookie));
+    }
 
     partial void OnSearchTextChanged(string value)
     {
@@ -131,10 +160,10 @@ public partial class AccountsViewModel : ViewModelBase
         }
 
         // Lọc lại và giữ nguyên form đang sửa: reselect theo tài khoản đang chỉnh sửa.
-        RefreshList(_editingId ?? SelectedAccount?.Id);
+        RefreshList(_editingId ?? SelectedRow?.Id);
     }
 
-    partial void OnSelectedAccountChanged(Account? value)
+    partial void OnSelectedRowChanged(AccountRowViewModel? value)
     {
         if (_isRefreshing)
         {
@@ -143,15 +172,17 @@ public partial class AccountsViewModel : ViewModelBase
 
         if (value != null)
         {
-            // Chọn lại đúng tài khoản đang sửa dở → giữ nguyên form (không nạp đè, tránh mất dữ liệu).
-            if (value.Id == _editingId)
+            // Chọn lại đúng tài khoản đang sửa dở → GIỮ nguyên form (không nạp đè, tránh mất dữ liệu).
+            // Ngoài trường hợp đó thì nạp form của tài khoản vừa chọn.
+            if (value.Id != _editingId)
             {
-                return;
+                IsNew = false;
+                LoadIntoForm(value.Account);
+                IsEditing = true;
             }
 
-            IsNew = false;
-            LoadIntoForm(value);
-            IsEditing = true;
+            // Plan B: bấm 1 tài khoản → nổi lên đầu danh sách + đưa cửa sổ Brave của nó ra trước (best-effort).
+            BringSelectedToFront(value);
         }
         else if (!IsNew)
         {
@@ -160,33 +191,64 @@ public partial class AccountsViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Khi chọn một tài khoản CÓ phiên đang chạy → cố đưa cửa sổ Brave của phiên đó ra trước (focus).
+    /// Best-effort — fail thì bỏ qua, không phá luồng. <b>KHÔNG</b> đổi thứ tự danh sách (theo yêu cầu người
+    /// dùng: bấm vào tài khoản KHÔNG được làm danh sách nhảy thứ tự).
+    /// </summary>
+    private void BringSelectedToFront(AccountRowViewModel row)
+    {
+        var session = _services.Sessions.Get(row.Id);
+        if (session is not null)
+        {
+            WindowFocus.BringToFront(session.BraveProcess);
+        }
+    }
+
     /// <summary>Nạp lại danh sách từ DB, giữ lựa chọn/form nếu bản ghi còn tồn tại.</summary>
     public void Reload()
     {
-        var selectId = _editingId ?? SelectedAccount?.Id;
+        var selectId = _editingId ?? SelectedRow?.Id;
         _all = _services.Accounts.GetAll();
         RefreshList(selectId);
     }
 
     /// <summary>
     /// Dựng lại danh sách hiển thị theo bộ lọc hiện tại rồi chọn lại bản ghi <paramref name="selectId"/>.
-    /// Việc gán SelectedAccount được thực hiện dưới cờ <c>_isRefreshing</c> nên KHÔNG nạp đè form.
+    /// Việc gán SelectedRow được thực hiện dưới cờ <c>_isRefreshing</c> nên KHÔNG nạp đè form.
     /// </summary>
     private void RefreshList(long? selectId)
     {
         _isRefreshing = true;
         ApplyFilter();
         var match = selectId is long id ? Accounts.FirstOrDefault(a => a.Id == id) : null;
-        SelectedAccount = match;
+        SelectedRow = match;
         _isRefreshing = false;
     }
 
     private void ApplyFilter()
     {
+        // Trước khi Clear: đồng bộ tick của các dòng ĐANG hiển thị vào tập bền (tick → thêm, bỏ tick → xóa).
+        // Dòng đang bị ẩn (không có trong Accounts) GIỮ nguyên trạng thái cũ trong tập → không mất tick.
+        foreach (var r in Accounts)
+        {
+            if (r.IsSelected)
+            {
+                _selectedIds.Add(r.Id);
+            }
+            else
+            {
+                _selectedIds.Remove(r.Id);
+            }
+        }
+
         Accounts.Clear();
         foreach (var account in _all.Where(a => PassesFilter(a, SearchText)))
         {
-            Accounts.Add(account);
+            // Dựng row VM bọc bản ghi; khôi phục tick theo Id; đồng bộ trạng thái phiên (chấm chạy / "Chờ lấy: N").
+            var row = new AccountRowViewModel(account) { IsSelected = _selectedIds.Contains(account.Id) };
+            row.SyncFromSession(_services.Sessions.Get(account.Id));
+            Accounts.Add(row);
         }
     }
 
@@ -206,12 +268,62 @@ public partial class AccountsViewModel : ViewModelBase
     private void Add()
     {
         _isRefreshing = true;
-        SelectedAccount = null;
+        SelectedRow = null;
         _isRefreshing = false;
 
         IsNew = true;
         ClearForm();
         IsEditing = true;
+    }
+
+    /// <summary>
+    /// "Chọn toàn bộ" — toggle trên danh sách ĐANG HIỂN THỊ (sau lọc): nếu chưa tick hết thì tick hết;
+    /// nếu đã tick hết thì bỏ tick hết.
+    /// </summary>
+    [RelayCommand]
+    private void SelectAll()
+    {
+        var allSelected = Accounts.Count > 0 && Accounts.All(r => r.IsSelected);
+        var target = !allSelected;
+        foreach (var row in Accounts)
+        {
+            row.IsSelected = target;
+        }
+    }
+
+    /// <summary>
+    /// "Chạy đã chọn" — mở phiên cho mọi tài khoản đang tick (idempotent: đang chạy thì no-op → không mở
+    /// trùng). Mở nhiều shop song song.
+    /// </summary>
+    [RelayCommand]
+    private void RunSelected()
+    {
+        foreach (var row in Accounts.Where(r => r.IsSelected).ToList())
+        {
+            _services.Sessions.Start(row.Id);
+        }
+
+        UpdateSelectedSessionStatus();
+    }
+
+    /// <summary>"Dừng đã chọn" — dừng phiên của mọi tài khoản đang tick (Stop tự no-op nếu không có phiên).</summary>
+    [RelayCommand]
+    private void StopSelected()
+    {
+        foreach (var row in Accounts.Where(r => r.IsSelected).ToList())
+        {
+            _services.Sessions.Stop(row.Id);
+        }
+
+        UpdateSelectedSessionStatus();
+    }
+
+    /// <summary>"Dừng tất cả" — dừng mọi phiên đang chạy (đóng &amp; kill hết Brave).</summary>
+    [RelayCommand]
+    private async Task StopAllAsync()
+    {
+        await _services.Sessions.StopAllAsync();
+        UpdateSelectedSessionStatus();
     }
 
     [RelayCommand]
@@ -254,6 +366,7 @@ public partial class AccountsViewModel : ViewModelBase
                 Phone = NullIfEmpty(EditPhone),
                 Cookie = NullIfEmpty(EditCookie),
                 Note = NullIfEmpty(EditNote),
+                ProxyKey = NullIfEmpty(EditProxyKey),
                 Status = EditStatus
             };
             _services.Accounts.Insert(account);
@@ -274,6 +387,7 @@ public partial class AccountsViewModel : ViewModelBase
             existing.Phone = NullIfEmpty(EditPhone);
             existing.Cookie = NullIfEmpty(EditCookie);
             existing.Note = NullIfEmpty(EditNote);
+            existing.ProxyKey = NullIfEmpty(EditProxyKey);
             existing.Status = EditStatus;
             _services.Accounts.Update(existing);
             account = existing;
@@ -326,12 +440,12 @@ public partial class AccountsViewModel : ViewModelBase
     [RelayCommand]
     private async Task DeleteAsync()
     {
-        if (SelectedAccount is null)
+        if (SelectedRow is null)
         {
             return;
         }
 
-        var target = SelectedAccount;
+        var target = SelectedRow.Account;
         var ok = await DialogService.ConfirmAsync(
             "Xóa tài khoản",
             $"Bạn có chắc muốn xóa tài khoản \"{target.Email}\"? Thao tác này không thể hoàn tác.");
@@ -343,7 +457,7 @@ public partial class AccountsViewModel : ViewModelBase
         _services.Accounts.Delete(target.Id);
         IsNew = false;
         _isRefreshing = true;
-        SelectedAccount = null;
+        SelectedRow = null;
         _isRefreshing = false;
         IsEditing = false;
         ClearForm();
@@ -354,125 +468,150 @@ public partial class AccountsViewModel : ViewModelBase
     private void ToggleShowPassword() => ShowPassword = !ShowPassword;
 
     /// <summary>
-    /// Mở trang bán hàng Shopee (Seller Centre) bằng một <b>hồ sơ (profile) persistent riêng</b> cho
-    /// từng tài khoản (nằm trong <c>&lt;thư-mục-DB&gt;/profiles/&lt;id&gt;</c>) để người dùng tự đăng nhập —
-    /// lần sau mở lại vẫn còn đăng nhập. Trong lúc cửa sổ mở, app <b>tự động bắt & lưu cookie</b> (không
-    /// hỏi nữa) và kết thúc khi người dùng đóng cửa sổ.
-    /// Định tuyến proxy: danh sách proxy thủ công dùng round-robin; nếu trống thì kiểm proxy KiotProxy
-    /// còn sống (API + thử kết nối), chết thì dùng IP máy.
+    /// Mở trang bán hàng cho tài khoản đang chọn bằng cách khởi động MỘT PHIÊN NỀN ĐỘC LẬP qua
+    /// <see cref="AccountSessionManager"/>. Mỗi tài khoản một phiên riêng (Brave/profile/CDP port/proxy/
+    /// theo-dõi-đơn riêng) → mở được nhiều shop song song; mở tài khoản này KHÔNG khóa nút tài khoản khác.
+    /// Lệnh chạy nhanh (chỉ Start) — vòng đời phiên (đăng nhập, bắt cookie, theo dõi đơn) chạy nền.
     /// </summary>
     [RelayCommand]
-    private async Task OpenSellerAsync()
+    private void OpenSeller()
     {
-        // Phòng hờ (nút vốn đã disable khi chưa lưu): cần Id để biết ghi cookie vào đâu.
+        // Phòng hờ (nút đã disable khi chưa lưu): cần Id để biết ghi cookie vào đâu.
         if (_editingId is null)
         {
-            await DialogService.InfoAsync(
-                "Mở trang bán hàng",
-                "Hãy lưu tài khoản trước khi mở trang bán hàng.");
             return;
         }
 
-        // Chụp Id tài khoản mục tiêu NGAY tại đây. Sau nhiều await dài (tải Chromium, mở browser,
-        // chờ đăng nhập) người dùng có thể chọn sang tài khoản khác hoặc bấm "+ Thêm" khiến
-        // _editingId đổi/null. Cookie phải luôn được ghi vào ĐÚNG tài khoản này, và không được
-        // đọc lại _editingId.Value (tránh ghi nhầm / ném InvalidOperationException khi null).
-        var targetId = _editingId.Value;
+        // Idempotent: đang mở thì Start không mở trùng. KHÔNG await vòng đời phiên.
+        _services.Sessions.Start(_editingId.Value);
 
-        IsBusy = true;
-        try
-        {
-            // Hồ sơ persistent riêng cho tài khoản này → mở lại vẫn còn đăng nhập.
-            var baseDir = System.IO.Path.GetDirectoryName(_services.Database.Path) ?? ".";
-            var userDataDir = BrowserProfilePaths.ForAccount(baseDir, targetId);
-            System.IO.Directory.CreateDirectory(userDataDir); // đảm bảo có thư mục
-
-            // 1) Chọn proxy: proxy thủ công → round-robin (không kiểm); trống → kiểm KiotProxy còn sống.
-            BusyStatus = "Đang kiểm tra proxy...";
-            var manual = _services.Proxies.GetAll();
-            ProxyEntry? proxy;
-            if (manual.Count > 0)
-            {
-                proxy = NextManualProxy(manual); // proxy thủ công: round-robin BỀN qua các lần mở, KHÔNG kiểm
-            }
-            else
-            {
-                var kiotKeys = _services.Settings.GetKiotProxyKeys();
-                IKiotProxyClient? kiot = kiotKeys.Count == 0 ? null : new KiotProxyClient(kiotKeys);
-                proxy = await ProxySelector.SelectKiotProxyAsync(kiot, _healthChecker);
-            }
-
-            // 2) Đảm bảo Chromium đã cài (tải lần đầu ~150MB) — chạy nền để không treo UI.
-            BusyStatus = "Đang chuẩn bị trình duyệt...";
-            var installCode = await Task.Run(() => _loginService.EnsureBrowserInstalled());
-            if (installCode != 0)
-            {
-                await DialogService.InfoAsync(
-                    "Mở trang bán hàng",
-                    "Không cài được trình duyệt. Kiểm tra mạng rồi thử lại.");
-                return;
-            }
-
-            // 3) Mở cửa sổ trình duyệt (profile persistent) tới trang bán hàng.
-            ILoginSession session;
-            try
-            {
-                session = await _loginService.OpenAsync(userDataDir, proxy);
-            }
-            catch (Exception ex)
-            {
-                await DialogService.InfoAsync("Mở trang bán hàng", ex.Message);
-                return;
-            }
-
-            await using (session)
-            {
-                // 4) Tự động bắt & lưu cookie trong lúc cửa sổ mở; kết thúc khi người dùng đóng cửa sổ.
-                //    KHÔNG hỏi "Đồng ý để lưu" nữa — cookie tự lưu.
-                BusyStatus = "Đã mở trình duyệt. Hãy đăng nhập; đăng nhập xong ĐÓNG cửa sổ — cookie sẽ tự lưu.";
-                string? lastSaved = null;
-                // Poll 1s (thu hẹp cửa sổ bỏ lỡ cookie phút chót khi đăng nhập rồi đóng nhanh).
-                const int PollMs = 1000;
-                while (!session.IsClosed)
-                {
-                    await Task.WhenAny(session.Closed, Task.Delay(PollMs));
-                    string json;
-                    try { json = await session.CaptureCookiesJsonAsync(); }
-                    catch { break; } // context đã đóng giữa chừng
-                    // CHỈ lưu khi đã có cookie ĐĂNG NHẬP Shopee — trang bán hàng set nhiều cookie theo dõi
-                    // (SPC_F, SPC_CDS, csrftoken...) ngay cả khi CHƯA đăng nhập; nếu lưu bừa sẽ đè cookie
-                    // hợp lệ cũ và báo "Đã lưu" sai sự thật.
-                    if (!string.IsNullOrEmpty(json) && json != lastSaved && ShopeeLoginCookies.IsLoggedIn(json))
-                    {
-                        if (SaveCapturedCookie(targetId, json) == SaveCookieResult.Saved)
-                        {
-                            lastSaved = json;
-                        }
-                    }
-                }
-
-                // Thông báo kết quả (KHÔNG hỏi — chỉ báo).
-                await DialogService.InfoAsync("Mở trang bán hàng",
-                    lastSaved != null
-                        ? "Đã lưu cookie đăng nhập vào tài khoản."
-                        : "Chưa thấy cookie đăng nhập (có thể bạn chưa đăng nhập).");
-            }
-        }
-        finally
-        {
-            IsBusy = false;
-            BusyStatus = null;
-        }
+        // Cập nhật ngay trạng thái nút/hiển thị cho tài khoản đang chọn.
+        UpdateSelectedSessionStatus();
     }
 
-    /// <summary>Chọn proxy thủ công kế tiếp theo round-robin BỀN qua các lần mở (không reset mỗi lần mở).</summary>
-    public ProxyEntry? NextManualProxy(IReadOnlyList<ProxyEntry> manual)
+    /// <summary>Dừng phiên của tài khoản đang chọn (đóng &amp; kill Brave của phiên đó, không ảnh hưởng phiên khác).</summary>
+    [RelayCommand]
+    private void Stop()
     {
-        if (manual.Count == 0) return null;
-        var p = manual[_manualProxyIndex % manual.Count];
-        _manualProxyIndex++;
-        return p;
+        if (_editingId is null)
+        {
+            return;
+        }
+
+        _services.Sessions.Stop(_editingId.Value);
+        UpdateSelectedSessionStatus();
     }
+
+    /// <summary>
+    /// Xử lý sự kiện đổi trạng thái của các phiên (có thể đến từ thread nền) — marshal về UI thread rồi
+    /// đổ trạng thái phiên của tài khoản đang chọn vào ô hiển thị + cập nhật nút.
+    /// </summary>
+    private void OnSessionsChanged() => RunOnUi(() =>
+    {
+        // Đổ trạng thái phiên vào TỪNG dòng (chấm chạy / "Chờ lấy: N") + cập nhật ô hiển thị của form.
+        SyncAllRows();
+        UpdateSelectedSessionStatus();
+    });
+
+    /// <summary>
+    /// Đồng bộ trạng thái phiên vào mọi dòng đang hiển thị. LUÔN chạy trên UI thread (gọi từ
+    /// <see cref="RunOnUi"/>) — chỉ đọc <see cref="Accounts"/> và set thuộc tính row, KHÔNG cấu trúc lại
+    /// ObservableCollection từ thread nền.
+    /// </summary>
+    private void SyncAllRows()
+    {
+        foreach (var row in Accounts)
+        {
+            row.SyncFromSession(_services.Sessions.Get(row.Id));
+        }
+    }
+
+    /// <summary>
+    /// Một phiên nền vừa lưu cookie vào DB cho <paramref name="accountId"/> — marshal về UI thread để dựng
+    /// lại danh sách (ObservableCollection chỉ được đụng trên UI thread) và cập nhật form nếu đang mở đúng
+    /// tài khoản đó.
+    /// </summary>
+    private void OnSessionCookieSaved(long accountId) => RunOnUi(() => RefreshAfterCookieSaved(accountId));
+
+    /// <summary>Chạy <paramref name="action"/> trên UI thread (chạy ngay nếu đã ở UI thread).</summary>
+    private static void RunOnUi(Action action)
+    {
+        var ui = Avalonia.Threading.Dispatcher.UIThread;
+        if (ui.CheckAccess())
+        {
+            action();
+        }
+        else
+        {
+            ui.Post(action);
+        }
+    }
+
+    /// <summary>Đổ trạng thái/số đơn của phiên theo tài khoản ĐANG CHỌN vào ô hiển thị; cập nhật nút mở/dừng.</summary>
+    private void UpdateSelectedSessionStatus()
+    {
+        var id = _editingId ?? SelectedRow?.Id;
+        var session = id is long sid ? _services.Sessions.Get(sid) : null;
+
+        BusyStatus = session?.StatusText;
+        OrderStatus = FormatOrderStatus(session?.ToShipCount);
+
+        OnPropertyChanged(nameof(CanOpenSeller));
+        OnPropertyChanged(nameof(CanStopSeller));
+    }
+
+    /// <summary>Định dạng dòng theo dõi đơn "Chờ Lấy Hàng" từ số đọc được (null = ẩn).</summary>
+    private static string? FormatOrderStatus(int? count)
+    {
+        if (count is not int n)
+        {
+            return null;
+        }
+
+        return n > 0
+            ? $"Chờ Lấy Hàng: {n} đơn — vẫn theo dõi mỗi 30'."
+            : "Chờ Lấy Hàng: 0 — kiểm lại sau 30'.";
+    }
+
+    /// <summary>
+    /// Sau khi một phiên nền đã ghi cookie vào DB cho <paramref name="accountId"/>, CẬP NHẬT TẠI CHỖ — KHÔNG
+    /// dựng lại cả danh sách. Danh sách không hiển thị cookie nên không cần rebuild; rebuild ở đây (sự kiện
+    /// <c>CookieSaved</c> bắn liên tục khi nhiều phiên đăng nhập + theo dõi 30') sẽ xóa tick người dùng và
+    /// đảo thứ tự "nổi lên đầu". Chỉ cần: (1) cập nhật cookie/UpdatedAt lên đúng instance <see cref="Account"/>
+    /// đang có trong <c>_all</c> (row bọc CHÍNH instance này → Save sau không ghi đè cookie về null), (2) nếu
+    /// đang MỞ đúng tài khoản đó thì cập nhật form. Chạy trên UI thread (gọi từ <see cref="RunOnUi"/>).
+    /// </summary>
+    private void RefreshAfterCookieSaved(long accountId)
+    {
+        var fresh = _services.Accounts.GetById(accountId);
+        if (fresh is null)
+        {
+            return; // tài khoản đã bị xóa — không có gì để cập nhật
+        }
+
+        // Cập nhật cookie/UpdatedAt trên instance đang có trong _all (row bọc chính instance này) → GIỮ tick
+        // + thứ tự (không đụng ObservableCollection).
+        var cached = _all.FirstOrDefault(a => a.Id == accountId);
+        if (cached is not null)
+        {
+            cached.Cookie = fresh.Cookie;
+            cached.UpdatedAt = fresh.UpdatedAt;
+        }
+
+        // Đang mở đúng tài khoản đó → cập nhật form (EditCookie đổi → HasCookie/CookieSizeText tự cập nhật).
+        if (_editingId == accountId)
+        {
+            EditCookie = fresh.Cookie ?? string.Empty;
+            UpdatedAtText = FormatDate(fresh.UpdatedAt);
+        }
+    }
+
+    /// <summary>
+    /// Chọn proxy thủ công kế tiếp theo round-robin BỀN. Nay dùng chung chỉ số của
+    /// <see cref="AccountSessionManager"/> (một nguồn duy nhất, chia sẻ giữa các phiên song song).
+    /// </summary>
+    public ProxyEntry? NextManualProxy(IReadOnlyList<ProxyEntry> manual)
+        => _services.Sessions.NextManualProxy(manual);
 
     /// <summary>Kết quả của thao tác lưu cookie đã bắt được vào tài khoản.</summary>
     public enum SaveCookieResult
@@ -528,7 +667,7 @@ public partial class AccountsViewModel : ViewModelBase
         {
             // Đã chuyển sang tài khoản khác / đang tạo mới → dựng lại danh sách (để instance của
             // targetId có cookie) nhưng giữ nguyên lựa chọn & form hiện tại.
-            RefreshList(_editingId ?? SelectedAccount?.Id);
+            RefreshList(_editingId ?? SelectedRow?.Id);
         }
 
         return SaveCookieResult.Saved;
@@ -542,12 +681,13 @@ public partial class AccountsViewModel : ViewModelBase
         EditPhone = a.Phone ?? string.Empty;
         EditCookie = a.Cookie ?? string.Empty;
         EditNote = a.Note ?? string.Empty;
+        EditProxyKey = a.ProxyKey ?? string.Empty;
         EditStatus = a.Status;
         CreatedAtText = FormatDate(a.CreatedAt);
         UpdatedAtText = FormatDate(a.UpdatedAt);
         ErrorMessage = null;
         ShowPassword = false;
-        OnPropertyChanged(nameof(CanOpenSeller));
+        UpdateSelectedSessionStatus();
     }
 
     private void ClearForm()
@@ -558,12 +698,13 @@ public partial class AccountsViewModel : ViewModelBase
         EditPhone = string.Empty;
         EditCookie = string.Empty;
         EditNote = string.Empty;
+        EditProxyKey = string.Empty;
         EditStatus = AccountStatus.ChuaKiemTra;
         CreatedAtText = null;
         UpdatedAtText = null;
         ErrorMessage = null;
         ShowPassword = false;
-        OnPropertyChanged(nameof(CanOpenSeller));
+        UpdateSelectedSessionStatus();
     }
 
     private static string? NullIfEmpty(string? value)
