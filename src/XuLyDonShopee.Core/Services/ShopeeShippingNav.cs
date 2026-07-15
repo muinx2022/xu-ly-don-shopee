@@ -47,6 +47,16 @@ public static class ShopeeShippingNav
     public static bool IsAddressTabText(string? s)
         => NormalizeUiText(s).Contains("địa chỉ", System.StringComparison.Ordinal);
 
+    /// <summary>Parse chuỗi trạng thái từ JS ("ready"/"collapsed"/"covered", không phân biệt hoa thường,
+    /// kèm khoảng trắng thừa) về <see cref="LinkReadiness"/>; null/rỗng/lạ → Unknown.</summary>
+    public static LinkReadiness ParseLinkReadiness(string? s) => NormalizeUiText(s) switch
+    {
+        "ready" => LinkReadiness.Ready,
+        "collapsed" => LinkReadiness.Collapsed,
+        "covered" => LinkReadiness.Covered,
+        _ => LinkReadiness.Unknown,
+    };
+
     // ===== Bước 2: so khớp địa chỉ lấy hàng theo tỉnh + text nút/checkbox/modal trong tab "Địa Chỉ" =====
 
     /// <summary>
@@ -135,4 +145,17 @@ public static class ShopeeShippingNav
     /// <summary>True nếu tiêu đề modal (đã chuẩn hóa) chính là "sửa địa chỉ".</summary>
     public static bool IsEditAddressModalTitle(string? s)
         => NormalizeUiText(s) == "sửa địa chỉ";
+}
+
+/// <summary>Trạng thái sẵn sàng nhận click của link trong submenu (đọc từ DOM bằng JS hình học).</summary>
+public enum LinkReadiness
+{
+    /// <summary>Không đọc được / giá trị lạ — coi như không rõ, xử lý thận trọng.</summary>
+    Unknown,
+    /// <summary>Link nhận click tại tâm của nó — click được ngay.</summary>
+    Ready,
+    /// <summary>Submenu đang CỤP (chiều cao ~0 / tâm link thuộc về phần tử ngoài submenu) — cần bung mục cha.</summary>
+    Collapsed,
+    /// <summary>Link đang bị phần tử khác TRONG cùng submenu đè (popover hover...) — chờ rồi thử lại, KHÔNG click mục cha.</summary>
+    Covered,
 }

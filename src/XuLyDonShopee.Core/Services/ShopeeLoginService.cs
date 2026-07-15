@@ -76,16 +76,20 @@ public interface ILoginSession : IAsyncDisposable
     /// <summary>
     /// <b>Bước đầu xử lý đơn:</b> ở menu trái (nhóm "Quản Lý Đơn Hàng") tìm &amp; bấm link
     /// <b>"Cài Đặt Vận Chuyển"</b>, chờ trang cài đặt vận chuyển mở rồi bấm tab <b>"Địa Chỉ"</b> —
-    /// <b>toàn bộ bằng thao tác kiểu người</b> (di chuột theo đường cong <see cref="HumanMouse"/>, click
-    /// down→trễ→up, có khoảng dừng/chờ ngẫu nhiên kiểu "người đọc trang" giữa các bước). Nếu submenu đang
-    /// đóng thì click mục cha "Quản Lý Đơn Hàng" kiểu người để mở ra rồi tìm lại.
+    /// <b>toàn bộ bằng thao tác kiểu người CÓ HIT-TEST</b> (di chuột theo đường cong <see cref="HumanMouse"/>,
+    /// click down→trễ→up, có khoảng dừng/chờ ngẫu nhiên kiểu "người đọc trang"; TRƯỚC KHI nhả click kiểm
+    /// <c>document.elementFromPoint</c> để KHÔNG click nhầm link khác khi submenu bị cụp / flyout đè). Nếu
+    /// submenu đang đóng thì click mục cha "Quản Lý Đơn Hàng" kiểu người để mở ra rồi tìm lại.
     /// <para>
-    /// <b>Graceful — không bao giờ ném:</b> chưa đăng nhập, Shopee đổi selector, trang không mở được, hoặc
-    /// context đã đóng → trả <c>false</c> (KHÔNG phá phiên). Trả <c>true</c> khi tab "Địa Chỉ" đã ở trạng
-    /// thái active (đã bấm hoặc vốn đang active).
+    /// <b>Graceful — không bao giờ ném:</b> mọi lỗi/hủy → trả một giá trị <see cref="ShippingNavResult"/>
+    /// (KHÔNG phá phiên). Kết quả phân biệt bước hỏng: <see cref="ShippingNavResult.Ok"/> (tab "Địa Chỉ" đã
+    /// active — đã bấm hoặc vốn đang active); <see cref="ShippingNavResult.PageNotOpened"/> (không đưa được
+    /// tới trang cài đặt vận chuyển, kể cả sau fallback Goto); <see cref="ShippingNavResult.AddressTabNotFound"/>
+    /// (đã mở trang nhưng không thấy / không bấm được tab "Địa Chỉ"); <see cref="ShippingNavResult.Failed"/>
+    /// (không có trang/phiên hoặc lỗi bất ngờ).
     /// </para>
     /// </summary>
-    Task<bool> OpenShippingAddressSettingsAsync(CancellationToken ct = default);
+    Task<ShippingNavResult> OpenShippingAddressSettingsAsync(CancellationToken ct = default);
 
     /// <summary>
     /// <b>Bước 2 xử lý đơn — đặt "địa chỉ lấy hàng":</b> chạy khi ĐANG ở tab "Địa Chỉ" của Cài đặt vận
@@ -637,21 +641,24 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Di chuột theo <b>đường cong</b> từ (<paramref name="mx"/>,<paramref name="my"/>) tới tâm ô
+        /// Di chuột theo <b>đường cong</b> từ (<paramref name="mx"/>,<paramref name="my"/>) tới tâm phần tử
         /// (+jitter nhỏ), tự <c>Mouse.MoveAsync</c> <b>từng điểm</b> (KHÔNG dùng <c>steps</c> lớn để đi
-        /// thẳng), rồi click kiểu người (down + trễ + up). Trả về vị trí chuột cuối (điểm đích).
+        /// thẳng). <b>Chỉ đưa chuột tới đích — KHÔNG click.</b> Trả về (vị trí chuột cuối, có bounding box
+        /// hay không): box null → kéo phần tử vào tầm nhìn, GIỮ nguyên vị trí chuột, <c>HasBox=false</c>.
         /// </summary>
-        private static async Task<(double X, double Y)> HumanMoveAndClickAsync(
+        private static async Task<(double X, double Y, bool HasBox)> HumanMoveToAsync(
             IPage page, IElementHandle el, double mx, double my, Random rng, CancellationToken ct)
         {
             var box = await el.BoundingBoxAsync().ConfigureAwait(false);
 
             double tx, ty;
+            bool hasBox;
             if (box is not null)
             {
                 // Tâm ô + jitter nhỏ (không luôn nhấn đúng chính giữa).
                 tx = box.X + box.Width / 2.0 + (rng.NextDouble() - 0.5) * Math.Min(box.Width * 0.3, 20);
                 ty = box.Y + box.Height / 2.0 + (rng.NextDouble() - 0.5) * Math.Min(box.Height * 0.3, 8);
+                hasBox = true;
             }
             else
             {
@@ -659,6 +666,7 @@ public class ShopeeLoginService
                 try { await el.ScrollIntoViewIfNeededAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
                 tx = mx;
                 ty = my;
+                hasBox = false;
             }
 
             // Số điểm theo khoảng cách (đường dài → nhiều điểm), giới hạn [12, 60] cho mượt.
@@ -673,12 +681,90 @@ public class ShopeeLoginService
                 await Task.Delay(rng.Next(5, 26), ct).ConfigureAwait(false); // 5–25ms giữa các điểm
             }
 
+            return (tx, ty, hasBox);
+        }
+
+        /// <summary>
+        /// Di chuột theo <b>đường cong</b> tới tâm phần tử rồi click kiểu người (down + trễ + up). Trả về
+        /// vị trí chuột cuối (điểm đích). <b>Click MÙ theo tọa độ — KHÔNG hit-test</b>: CHỈ dùng cho luồng
+        /// đăng nhập (<see cref="TryHumanLoginAsync"/> — form login đơn giản, không có submenu cụp/flyout
+        /// đè). Mọi thao tác NGHIỆP VỤ (menu/modal) dùng <see cref="HumanMoveAndClickVerifiedAsync"/>.
+        /// </summary>
+        private static async Task<(double X, double Y)> HumanMoveAndClickAsync(
+            IPage page, IElementHandle el, double mx, double my, Random rng, CancellationToken ct)
+        {
+            (double tx, double ty, _) = await HumanMoveToAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
+
             // Click kiểu người: nhấn giữ một khoảng ngắn rồi nhả.
             await page.Mouse.DownAsync().ConfigureAwait(false);
             await Task.Delay(rng.Next(40, 121), ct).ConfigureAwait(false);
             await page.Mouse.UpAsync().ConfigureAwait(false);
 
             return (tx, ty);
+        }
+
+        /// <summary>True nếu tại điểm (x,y) của viewport, phần tử nhận sự kiện chính là el / con của el /
+        /// tổ tiên của el (elementFromPoint trả node TRÊN CÙNG — bị phần tử khác đè thì trả phần tử đè).</summary>
+        private static async Task<bool> IsPointOnElementAsync(IElementHandle el, double x, double y)
+        {
+            try
+            {
+                return await el.EvaluateAsync<bool>(
+                    "(node, pt) => { const hit = document.elementFromPoint(pt.x, pt.y);" +
+                    " return !!hit && (node === hit || node.contains(hit) || hit.contains(node)); }",
+                    new { x, y }).ConfigureAwait(false);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Primitive click <b>kiểu người CÓ HIT-TEST</b> cho thao tác nghiệp vụ: đưa chuột theo đường cong
+        /// tới phần tử (<see cref="HumanMoveToAsync"/>), rồi TRƯỚC KHI nhả click <b>kiểm tra
+        /// <c>document.elementFromPoint</c></b> tại điểm click có đúng là phần tử đích (hoặc con/tổ tiên
+        /// của nó) — chống <b>click nhầm link khác</b> khi submenu bị cụp hoặc flyout/popover đè lên toạ độ.
+        /// Poll hit-test tối đa ~2s với chuột ĐỨNG YÊN tại đích (giống người dừng nhìn rồi mới bấm; popover
+        /// hover của item khác tự tắt khi chuột rời item đó). Chỉ <c>Down/trễ/Up</c> khi hit-test PASS. Trả
+        /// về (vị trí chuột cuối, đã click hay chưa) — <c>Clicked=false</c> khi không có bounding box hoặc
+        /// hit-test fail suốt ~2s (KHÔNG bao giờ click mù vào tọa độ).
+        /// </summary>
+        private static async Task<(double X, double Y, bool Clicked)> HumanMoveAndClickVerifiedAsync(
+            IPage page, IElementHandle el, double mx, double my, Random rng, CancellationToken ct)
+        {
+            (double tx, double ty, bool hasBox) =
+                await HumanMoveToAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
+
+            // Không có bounding box → thử kéo vào tầm nhìn + move lại MỘT lần; vẫn không có box → KHÔNG click.
+            if (!hasBox)
+            {
+                try { await el.ScrollIntoViewIfNeededAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
+                (tx, ty, hasBox) = await HumanMoveToAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
+                if (!hasBox)
+                {
+                    return (mx, my, false);
+                }
+            }
+
+            // Poll hit-test tối đa ~2s: chuột ĐỨNG YÊN tại đích, dừng ngẫu nhiên rồi kiểm — giống người dừng
+            // nhìn rồi mới bấm (popover hover của item khác tự tắt vì chuột không còn trên item đó).
+            var deadline = DateTime.UtcNow.AddMilliseconds(2000);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                if (await IsPointOnElementAsync(el, tx, ty).ConfigureAwait(false))
+                {
+                    // Hit-test PASS → click kiểu người: nhấn giữ một khoảng ngắn rồi nhả.
+                    await page.Mouse.DownAsync().ConfigureAwait(false);
+                    await Task.Delay(rng.Next(40, 121), ct).ConfigureAwait(false);
+                    await page.Mouse.UpAsync().ConfigureAwait(false);
+                    return (tx, ty, true);
+                }
+
+                await Task.Delay(rng.Next(150, 301), ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            // Poll fail suốt ~2s → điểm click đang thuộc phần tử khác (bị che/cụp) → KHÔNG Down/Up.
+            return (tx, ty, false);
         }
 
         public async Task<string> CaptureCookiesJsonAsync()
@@ -882,14 +968,14 @@ public class ShopeeLoginService
         // không tìm được link để click kiểu người).
         private const string ShippingSettingsUrl = "https://banhang.shopee.vn/portal/all-settings/shipping";
 
-        public async Task<bool> OpenShippingAddressSettingsAsync(CancellationToken ct = default)
+        public async Task<ShippingNavResult> OpenShippingAddressSettingsAsync(CancellationToken ct = default)
         {
             try
             {
                 var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
                 if (page is null)
                 {
-                    return false;
+                    return ShippingNavResult.Failed;
                 }
 
                 // Random nội bộ (app dùng ngẫu nhiên thật, đồng bộ style với TryHumanLoginAsync).
@@ -905,31 +991,121 @@ public class ShopeeLoginService
                 // Dừng kiểu "người đọc trang" trước khi bắt đầu.
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
 
+                // Click mục cha "Quản Lý Đơn Hàng" TỐI ĐA 1 lần/lượt: click lần 2 khi nhóm đang mở sẽ toggle
+                // cụp lại (cấm). Cờ dùng chung cho cả nhánh đọc-trạng-thái lẫn nhánh không-thấy-link.
+                bool parentClicked = false;
+                bool clickedLink = false;
+
                 // 1) Tìm link "Cài Đặt Vận Chuyển" (poll, deadline ~10s).
                 var link = await FindShippingLinkAsync(page, 10000, rng, ct).ConfigureAwait(false);
 
-                // 2) Chưa thấy (submenu có thể đang đóng) → click mục cha "Quản Lý Đơn Hàng" kiểu người rồi tìm lại.
-                if (link is null)
-                {
-                    var parent = await FindOrderMenuParentAsync(page, ct).ConfigureAwait(false);
-                    if (parent is not null)
-                    {
-                        (mx, my) = await HumanMoveAndClickAsync(page, parent, mx, my, rng, ct).ConfigureAwait(false);
-                        await Task.Delay(rng.Next(500, 1500), ct).ConfigureAwait(false);
-                        link = await FindShippingLinkAsync(page, 10000, rng, ct).ConfigureAwait(false);
-                    }
-                }
-
-                // 3) Click link kiểu người rồi chờ trang cài đặt vận chuyển mở.
-                bool opened;
                 if (link is not null)
                 {
-                    (mx, my) = await HumanMoveAndClickAsync(page, link, mx, my, rng, ct).ConfigureAwait(false);
-                    opened = await WaitShippingPageAsync(page, 20000, ct).ConfigureAwait(false);
+                    // 2) TRƯỚC khi di chuột: đọc trạng thái bung/cụp bằng JS hình học (KHÔNG cần hover) rồi
+                    //    xử lý theo trạng thái. Poll nhẹ ~5s để trạng thái nhất thời (popover hover của item
+                    //    khác) tự tan; mỗi vòng chờ 300–800ms ngẫu nhiên.
+                    var readyDeadline = DateTime.UtcNow.AddMilliseconds(5000);
+                    bool scrolledForUnknown = false;
+                    while (!clickedLink && DateTime.UtcNow < readyDeadline)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var readiness = await GetLinkReadinessAsync(link).ConfigureAwait(false);
+
+                        if (readiness == LinkReadiness.Ready)
+                        {
+                            // Link nhận click tại tâm → click CÓ HIT-TEST (hàng rào cuối ngay trước Down/Up).
+                            (mx, my, clickedLink) =
+                                await HumanMoveAndClickVerifiedAsync(page, link, mx, my, rng, ct).ConfigureAwait(false);
+                            break;
+                        }
+
+                        if (readiness == LinkReadiness.Collapsed)
+                        {
+                            // Nhóm "Quản Lý Đơn Hàng" đang CỤP (đúng yêu cầu người dùng: kiểm tra rồi bung).
+                            // Đã bung THẬT 1 lần rồi mà vẫn cụp → thôi (không click lại kẻo toggle cụp nhóm đang mở).
+                            if (parentClicked)
+                            {
+                                break;
+                            }
+
+                            var parent = await FindOrderMenuParentAsync(page, ct).ConfigureAwait(false);
+                            if (parent is null)
+                            {
+                                break;
+                            }
+
+                            // Click mục cha CÓ HIT-TEST. CHỈ tiêu "ngân sách bung 1 lần" (parentClicked) khi chuột
+                            // THẬT SỰ nhả (Clicked==true): hit-test fail thì chuột CHƯA HỀ nhả → không có nguy cơ
+                            // toggle → vòng sau readiness vẫn Collapsed sẽ thử bung lại (còn trong deadline).
+                            bool parentActuallyClicked;
+                            (mx, my, parentActuallyClicked) =
+                                await HumanMoveAndClickVerifiedAsync(page, parent, mx, my, rng, ct).ConfigureAwait(false);
+                            if (parentActuallyClicked)
+                            {
+                                parentClicked = true;
+                                // Bung THÀNH CÔNG → cấp lại trọn 5s cho phần còn lại (chờ, tìm lại link, đọc
+                                // readiness, click link kiểu người) — bảo đảm sau khi bung LUÔN có ≥1 lượt đọc
+                                // readiness + thử click link trước khi được phép rơi xuống Goto (Goto là đường
+                                // thoát HIẾM, không phải kết cục của một lượt bung menu thành công).
+                                readyDeadline = DateTime.UtcNow.AddMilliseconds(5000);
+                            }
+
+                            await Task.Delay(rng.Next(500, 1500), ct).ConfigureAwait(false);
+
+                            // Tìm lại link (instance có thể đổi sau khi submenu bung) rồi đọc lại ở vòng sau.
+                            link = await FindShippingLinkAsync(page, 10000, rng, ct).ConfigureAwait(false);
+                            if (link is null)
+                            {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        if (readiness == LinkReadiness.Unknown)
+                        {
+                            // Không rõ → thử kéo vào tầm nhìn MỘT lần rồi đọc lại; vẫn Unknown → hết cách bằng chuột.
+                            if (scrolledForUnknown)
+                            {
+                                break;
+                            }
+                            scrolledForUnknown = true;
+                            try { await link.ScrollIntoViewIfNeededAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
+                            await Task.Delay(rng.Next(300, 801), ct).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        // Covered (bị popover/flyout trong cùng submenu đè) → chờ rồi đọc lại; KHÔNG click mục cha.
+                        await Task.Delay(rng.Next(300, 801), ct).ConfigureAwait(false);
+                    }
                 }
                 else
                 {
-                    // FALLBACK CUỐI (hiếm — Shopee đổi DOM menu): điều hướng thẳng. Kém human hơn, đường thoát.
+                    // 4) Không thấy link ngay từ đầu (submenu nhiều khả năng chưa render) → click mục cha
+                    //    verified (không cần đọc trạng thái) rồi tìm lại & click. Vẫn giữ giới hạn 1 lần click cha.
+                    var parent = await FindOrderMenuParentAsync(page, ct).ConfigureAwait(false);
+                    if (parent is not null && !parentClicked)
+                    {
+                        (mx, my, _) =
+                            await HumanMoveAndClickVerifiedAsync(page, parent, mx, my, rng, ct).ConfigureAwait(false);
+                        parentClicked = true;
+                        await Task.Delay(rng.Next(500, 1500), ct).ConfigureAwait(false);
+                        link = await FindShippingLinkAsync(page, 10000, rng, ct).ConfigureAwait(false);
+                        if (link is not null)
+                        {
+                            (mx, my, clickedLink) =
+                                await HumanMoveAndClickVerifiedAsync(page, link, mx, my, rng, ct).ConfigureAwait(false);
+                        }
+                    }
+                }
+
+                // 3) Click được link → chờ trang cài đặt vận chuyển mở (CHỈ nhận theo URL).
+                bool opened = clickedLink
+                    && await WaitShippingPageAsync(page, 20000, ct).ConfigureAwait(false);
+
+                // 4b) Chưa mở được (click không ăn / không thấy link / URL không đổi) → fallback Goto MỘT lần
+                //     (đường thoát cuối, kém human hơn — hiếm khi tới nếu hit-test click đã ăn).
+                if (!opened)
+                {
                     try
                     {
                         await page.GotoAsync(ShippingSettingsUrl, new PageGotoOptions
@@ -945,31 +1121,33 @@ public class ShopeeLoginService
 
                 if (!opened)
                 {
-                    return false;
+                    return ShippingNavResult.PageNotOpened;
                 }
 
-                // 4) Dừng "đọc trang" rồi tìm & bấm tab "Địa Chỉ".
+                // 5) Dừng "đọc trang" rồi tìm & bấm tab "Địa Chỉ".
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
 
                 var tab = await FindAddressTabAsync(page, 10000, rng, ct).ConfigureAwait(false);
                 if (tab is null)
                 {
-                    return false;
+                    return ShippingNavResult.AddressTabNotFound;
                 }
 
-                // Tab đã active → coi như xong (không click lại). Chưa active → click kiểu người.
+                // Tab đã active → coi như xong (không click lại). Chưa active → click CÓ HIT-TEST.
                 if (IsTabActive(await tab.GetAttributeAsync("class").ConfigureAwait(false)))
                 {
-                    return true;
+                    return ShippingNavResult.Ok;
                 }
 
-                await HumanMoveAndClickAsync(page, tab, mx, my, rng, ct).ConfigureAwait(false);
-                return true;
+                bool clickedTab;
+                (mx, my, clickedTab) =
+                    await HumanMoveAndClickVerifiedAsync(page, tab, mx, my, rng, ct).ConfigureAwait(false);
+                return clickedTab ? ShippingNavResult.Ok : ShippingNavResult.AddressTabNotFound;
             }
             catch
             {
-                // Bất kỳ lỗi nào (selector đổi, context ngắt, hủy...) → false, KHÔNG phá phiên.
-                return false;
+                // Bất kỳ lỗi nào (selector đổi, context ngắt, hủy...) → Failed, KHÔNG phá phiên.
+                return ShippingNavResult.Failed;
             }
         }
 
@@ -1022,6 +1200,37 @@ public class ShopeeLoginService
         }
 
         /// <summary>
+        /// Đọc <b>trạng thái bung/cụp</b> của link trong submenu bằng <b>JS hình học — KHÔNG cần di chuột</b>
+        /// (elementFromPoint là hình học thuần, không cần hover). DOM Shopee không có class trạng thái trên
+        /// <c>li.sidebar-menu-box</c> nên phải suy từ chiều cao <c>ul.sidebar-submenu</c> + phần tử nhận
+        /// click tại tâm link. Nuốt lỗi → <see cref="LinkReadiness.Unknown"/>. Cho kết quả qua
+        /// <see cref="ShopeeShippingNav.ParseLinkReadiness"/>.
+        /// </summary>
+        private static async Task<LinkReadiness> GetLinkReadinessAsync(IElementHandle link)
+        {
+            string raw;
+            try
+            {
+                raw = await link.EvaluateAsync<string>(
+                    "(node) => {" +
+                    " const ul = node.closest('ul.sidebar-submenu');" +
+                    " const ulRect = ul ? ul.getBoundingClientRect() : null;" +
+                    " if (ulRect && ulRect.height < 2) return 'collapsed';" +
+                    " const r = node.getBoundingClientRect();" +
+                    " if (r.width === 0 || r.height === 0) return 'collapsed';" +
+                    " const cx = r.left + r.width / 2, cy = r.top + r.height / 2;" +
+                    " const hit = document.elementFromPoint(cx, cy);" +
+                    " if (!hit) return 'covered';" +
+                    " if (node === hit || node.contains(hit) || hit.contains(node)) return 'ready';" +
+                    " return ul && ul.contains(hit) ? 'covered' : 'collapsed';" +
+                    "}").ConfigureAwait(false);
+            }
+            catch { raw = "unknown"; }
+
+            return ShopeeShippingNav.ParseLinkReadiness(raw);
+        }
+
+        /// <summary>
         /// Dò mục cha "Quản Lý Đơn Hàng" ở menu trái (để click mở submenu). Thử: (a)
         /// <c>li.ps_menu_order div.sidebar-menu-item</c>; (b) fallback duyệt mọi <c>.sidebar-menu-item</c>
         /// khớp <see cref="ShopeeShippingNav.IsOrderMenuText"/>. Chỉ nhận element đang hiển thị. Một lượt
@@ -1055,9 +1264,12 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Chờ trang Cài đặt vận chuyển mở: poll tới khi hết <paramref name="timeoutMs"/>, điều kiện là
-        /// <c>page.Url</c> chứa <c>/portal/all-settings/shipping</c> HOẶC đã render <c>.eds-tabs__nav-tab</c>
-        /// (SPA có thể đổi route mà không load document mới → KHÔNG dùng WaitForNavigation). Hết giờ → false.
+        /// Chờ trang Cài đặt vận chuyển mở: poll tới khi hết <paramref name="timeoutMs"/>, điều kiện DUY NHẤT
+        /// là <c>page.Url</c> chứa <c>/portal/all-settings/shipping</c>
+        /// (<see cref="ShopeeShippingNav.IsShippingSettingHref"/>). <b>KHÔNG</b> nhận theo
+        /// <c>.eds-tabs__nav-tab</c> nữa: trang khác cũng có thanh eds-tabs → dương tính giả (nhận nhầm là đã
+        /// mở rồi fail muộn ở bước tìm tab "Địa Chỉ"). <c>page.Url</c> của Playwright phản ánh cả đổi route
+        /// SPA qua history API nên đủ tin (KHÔNG dùng WaitForNavigation). Hết giờ → false.
         /// </summary>
         private static async Task<bool> WaitShippingPageAsync(IPage page, int timeoutMs, CancellationToken ct)
         {
@@ -1068,11 +1280,6 @@ public class ShopeeLoginService
                 try
                 {
                     if (ShopeeShippingNav.IsShippingSettingHref(page.Url))
-                    {
-                        return true;
-                    }
-
-                    if (await page.QuerySelectorAsync(".eds-tabs__nav-tab").ConfigureAwait(false) is not null)
                     {
                         return true;
                     }
@@ -1571,9 +1778,12 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Click kiểu người NHƯNG chỉ khi phần tử đang hiển thị (<c>BoundingBoxAsync() != null</c>): scroll
-        /// vào tầm nhìn trước, box vẫn null → KHÔNG click (tránh <see cref="HumanMoveAndClickAsync"/> nhấn
-        /// tại vị trí chuột cũ) và trả <c>Clicked=false</c>. Trả về vị trí chuột mới + đã click hay chưa.
+        /// Click <b>kiểu người CÓ HIT-TEST</b> nhưng chỉ khi phần tử đang hiển thị
+        /// (<c>BoundingBoxAsync() != null</c>): scroll vào tầm nhìn trước, box vẫn null → KHÔNG click và trả
+        /// <c>Clicked=false</c>. Có box → gọi <see cref="HumanMoveAndClickVerifiedAsync"/> (chỉ nhả chuột khi
+        /// <c>elementFromPoint</c> tại điểm click đúng là phần tử đích — chống click nhầm link khác khi bị
+        /// che/cụp); <c>Clicked</c> lấy từ kết quả verified (hit-test fail → false, KHÔNG click mù). Trả về
+        /// vị trí chuột mới + đã click hay chưa.
         /// </summary>
         private static async Task<(double X, double Y, bool Clicked)> TryHumanClickVisibleAsync(
             IPage page, IElementHandle el, double mx, double my, Random rng, CancellationToken ct)
@@ -1589,8 +1799,9 @@ public class ShopeeLoginService
                 }
             }
 
-            (mx, my) = await HumanMoveAndClickAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
-            return (mx, my, true);
+            bool clicked;
+            (mx, my, clicked) = await HumanMoveAndClickVerifiedAsync(page, el, mx, my, rng, ct).ConfigureAwait(false);
+            return (mx, my, clicked);
         }
 
         public async ValueTask DisposeAsync()

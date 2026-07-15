@@ -79,6 +79,24 @@ public class ShopeeShippingNavTests
         Assert.Equal(expected, ShopeeShippingNav.IsAddressTabText(input));
     }
 
+    // ===== ParseLinkReadiness: chuỗi trạng thái từ JS → enum (chuẩn hóa hoa-thường/space/xuống dòng);
+    //        null / rỗng / giá trị lạ → Unknown =====
+    [Theory]
+    [InlineData("ready", LinkReadiness.Ready)]
+    [InlineData("Ready ", LinkReadiness.Ready)]
+    [InlineData("collapsed", LinkReadiness.Collapsed)]
+    [InlineData("COLLAPSED\n", LinkReadiness.Collapsed)]
+    [InlineData("covered", LinkReadiness.Covered)]
+    [InlineData("  Covered  ", LinkReadiness.Covered)]
+    [InlineData("unknown", LinkReadiness.Unknown)]
+    [InlineData("gibberish", LinkReadiness.Unknown)]
+    [InlineData("", LinkReadiness.Unknown)]
+    [InlineData(null, LinkReadiness.Unknown)]
+    public void ParseLinkReadiness_ChuoiVeEnum(string? input, LinkReadiness expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.ParseLinkReadiness(input));
+    }
+
     // ===== ProvinceCoreName: tên lõi tỉnh từ Account.PickupAddress (bỏ tiền tố loại đơn vị) =====
     [Theory]
     [InlineData("Hà Nội", "hà nội")]

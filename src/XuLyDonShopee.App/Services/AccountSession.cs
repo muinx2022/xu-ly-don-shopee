@@ -196,11 +196,18 @@ public partial class AccountSession : ObservableObject, IAccountSession
         StatusText = "Đang mở Cài đặt vận chuyển → Địa Chỉ (kiểu người)...";
         try
         {
-            // Bước 1: mở Cài đặt vận chuyển → tab Địa Chỉ.
-            var ok = await s.OpenShippingAddressSettingsAsync(tok).ConfigureAwait(false);
-            if (!ok)
+            // Bước 1: mở Cài đặt vận chuyển → tab Địa Chỉ. Kết quả phân biệt bước hỏng để báo StatusText đúng.
+            var nav = await s.OpenShippingAddressSettingsAsync(tok).ConfigureAwait(false);
+            if (nav != ShippingNavResult.Ok)
             {
-                StatusText = "Không mở được Cài đặt vận chuyển — thao tác tay trong cửa sổ Brave.";
+                StatusText = nav switch
+                {
+                    ShippingNavResult.PageNotOpened =>
+                        "Không mở được trang Cài đặt vận chuyển (click không ăn / trang không chuyển) — thao tác tay trong cửa sổ Brave.",
+                    ShippingNavResult.AddressTabNotFound =>
+                        "Đã mở Cài đặt vận chuyển nhưng không thấy tab \"Địa Chỉ\" — Shopee có thể đã đổi giao diện, thao tác tay trong Brave.",
+                    _ => "Không mở được Cài đặt vận chuyển — thao tác tay trong cửa sổ Brave.",
+                };
                 return false;
             }
 

@@ -1,9 +1,14 @@
 # Plan: Sửa lỗi "Xử lý đơn" click nhầm link khác — hit-test elementFromPoint trước khi nhả click
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable tự chạy build (0 warning/0 error, `-p:Deterministic=false`) + `dotnet test`
+  (**279/279 pass**); tự đọc toàn bộ diff 5 file đối chiếu đặc tả; chạy panel rà soát đối kháng 18 agent
+  (3 góc nhìn × phản biện 2/3 phiếu) → xác nhận 1 lỗi (deadline 5s bao trùm cả chuỗi bung mục cha →
+  máy chậm bung xong vẫn rơi xuống Goto máy móc). Đã giao Opus sửa: hứng `parentActuallyClicked`
+  (chỉ tiêu ngân sách bung khi chuột thật sự nhả) + reset `readyDeadline` 5s sau khi bung thành công.
+  Sửa xong build 0/0, test lại **279/279**.
 
 ## 1. Bối cảnh & lỗi thực tế
 
@@ -299,4 +304,93 @@ if (nav != ShippingNavResult.Ok)
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-(để trống)
+**Ngày thực thi:** 2026-07-15 · **Trạng thái:** hoàn thành (build + full test đạt; chưa smoke live — không có phiên Shopee thật).
+
+### Baseline test (đo TRƯỚC khi sửa)
+- `dotnet build XuLyDonShopee.sln -c Debug -p:Deterministic=false` → Build succeeded, 0 Warning / 0 Error.
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build` → **Passed! Failed: 0, Passed: 269, Skipped: 0, Total: 269**.
+  (Con số nền thực tế là 269, KHÔNG phải 201 như plan cũ.)
+
+### Đã hoàn thành (từng hạng mục plan)
+- **Bước 1 — enum `ShippingNavResult`** (file MỚI `src/XuLyDonShopee.Core/Services/ShippingNavResult.cs`):
+  4 giá trị `Ok/Failed/PageNotOpened/AddressTabNotFound` + XML-doc tiếng Việt đúng nguyên văn plan.
+- **Bước 2 — primitive click có hit-test** (`ShopeeLoginService.cs`, class `LoginSession`):
+  - Tách `HumanMoveToAsync(page, el, mx, my, rng, ct)` → `(double X, double Y, bool HasBox)` từ ruột
+    `HumanMoveAndClickAsync` (nguyên logic box/jitter/scroll/đường cong 5–25ms/điểm).
+  - `HumanMoveAndClickAsync` gốc GIỜ gọi `HumanMoveToAsync` + Down/trễ 40–120ms/Up — **hành vi login KHÔNG đổi**
+    (box null vẫn Down/Up tại vị trí chuột cũ y như trước). XML-doc ghi rõ "click MÙ — chỉ dùng cho login".
+  - Thêm `IsPointOnElementAsync(el, x, y)` (elementFromPoint + `node===hit || node.contains(hit) || hit.contains(node)`,
+    nuốt lỗi → false) đúng nguyên văn plan.
+  - Thêm `HumanMoveAndClickVerifiedAsync(...)`: move tới đích; HasBox=false → scroll + move lại 1 lần, vẫn không
+    box → `(mx,my,false)` (không click); poll hit-test ~2s (mỗi vòng 150–300ms, chuột đứng yên); pass →
+    Down/trễ/Up → `(tx,ty,true)`; fail cả 2s → `(tx,ty,false)` (KHÔNG click mù).
+  - Đổi ruột `TryHumanClickVisibleAsync` (giữ chữ ký `(X,Y,Clicked)`) sang gọi `HumanMoveAndClickVerifiedAsync`;
+    `Clicked` lấy từ kết quả verified → mọi call site trong `SetPickupAddressAsync` (Sửa, label checkbox, Lưu) và
+    `HumanCancelModalAsync` (nút Hủy) tự hưởng hit-test, không đổi chữ ký.
+- **Bước 2b — đọc trạng thái bung/cụp (không di chuột):**
+  - `ShopeeShippingNav.cs`: thêm enum top-level `LinkReadiness {Unknown, Ready, Collapsed, Covered}` + hàm thuần
+    `ParseLinkReadiness(string?)` (normalize rồi switch, lạ/null/rỗng → Unknown) đúng nguyên văn plan.
+  - `LoginSession.GetLinkReadinessAsync(link)` → `Task<LinkReadiness>`: chạy `link.EvaluateAsync<string>` với
+    script JS tri-state **đúng nguyên văn plan** (closest ul.sidebar-submenu; height<2 → collapsed; rect 0 →
+    collapsed; elementFromPoint tâm: null → covered; node/con/tổ tiên → ready; cùng ul → covered; ngoài ul →
+    collapsed), nuốt lỗi → "unknown", rồi cho qua `ParseLinkReadiness`.
+- **Bước 3 — luồng `OpenShippingAddressSettingsAsync`** (đổi chữ ký interface + implement):
+  - `ILoginSession`: `Task<bool>` → `Task<ShippingNavResult>` + cập nhật XML-doc (nêu rõ các giá trị enum).
+    Đã grep xác nhận KHÔNG có stub `ILoginSession` trong test; call site duy nhất là `AccountSession.ProcessOrdersAsync`.
+  - Implement: page null → `Failed`. Tìm link → nếu thấy: **poll readiness ~5s** (mỗi vòng 300–800ms): Ready →
+    click verified; Collapsed → click verified mục cha (TỐI ĐA 1 lần/lượt qua cờ `parentClicked`) rồi tìm lại link
+    + đọc lại; Covered → chờ đọc lại (KHÔNG click cha); Unknown → scroll 1 lần rồi đọc lại, vẫn Unknown → thôi.
+    Không thấy link ngay từ đầu → nhánh cũ (click cha verified 1 lần → tìm lại → click verified).
+  - `WaitShippingPageAsync` **siết chỉ nhận theo URL** `IsShippingSettingHref(page.Url)` — XÓA nhánh
+    `.eds-tabs__nav-tab`; XML-doc cập nhật giải thích dương-tính-giả.
+  - Sau mọi nhánh: `WaitShippingPageAsync(20s)`; chưa mở → fallback `GotoAsync` MỘT lần + wait lại; vẫn không →
+    `PageNotOpened`. Tab "Địa Chỉ": null → `AddressTabNotFound`; active → `Ok`; chưa active → click verified,
+    Clicked==false → `AddressTabNotFound`, click được → `Ok`. `catch` ngoài → `Failed`.
+- **Bước 5 — `AccountSession.ProcessOrdersAsync`** (`src/XuLyDonShopee.App/Services/AccountSession.cs`):
+  đổi sang `var nav = await ...; if (nav != Ok) { StatusText = nav switch {...}; return false; }` đúng 3 câu báo
+  lỗi phân biệt trong plan. `using XuLyDonShopee.Core.Services;` đã có sẵn. Chữ ký `Task<bool>` giữ nguyên.
+- **Bước 6 — test:** thêm `ParseLinkReadiness_ChuoiVeEnum` (10 case: ready/"Ready "/collapsed/"COLLAPSED\n"/
+  covered/"  Covered  "/unknown/gibberish/""/null) trong `ShopeeShippingNavTests.cs`.
+
+### Kết quả kiểm chứng (sau khi sửa — số liệu thật)
+- `dotnet build XuLyDonShopee.sln -c Debug -p:Deterministic=false` → **Build succeeded, 0 Warning / 0 Error**.
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build` → **Passed! Failed: 0, Passed: 279, Skipped: 0, Total: 279**
+  (= 269 baseline + 10 case ParseLinkReadiness mới; KHÔNG đỏ test cũ).
+- Grep `ShopeeLoginService.cs`: `HumanMoveAndClickAsync(` (click MÙ) chỉ còn 3 chỗ — dòng 577 (login submit),
+  630 (HumanFillAsync/login), 693 (định nghĩa); tất cả click NGHIỆP VỤ (link/parent/tab + TryHumanClickVisibleAsync
+  cho Sửa/checkbox/Lưu/Hủy) đi qua `HumanMoveAndClickVerifiedAsync`. KHÔNG có `.ClickAsync(` / `.FillAsync(` /
+  `Mouse.ClickAsync(` / `.CheckAsync(` mới. `Keyboard.TypeAsync` chỉ ở HumanFillAsync (login) như cũ.
+- `git status --short`: đúng 5 file trong phạm vi (M AccountSession.cs, M ShopeeLoginService.cs,
+  M ShopeeShippingNav.cs, M ShopeeShippingNavTests.cs, ?? ShippingNavResult.cs). Chưa commit (Fable commit).
+
+### Vướng mắc / bỏ dở
+- **KHÔNG smoke live** trên Shopee thật: môi trường không có phiên đăng nhập — chỉ phủ bằng build + full test +
+  đọc code đối chiếu (đúng lưu ý bài học cũ, KHÔNG claim đã chạy live). Cần người dùng smoke sau merge.
+- Không có hạng mục nào bị bỏ dở.
+
+### Đề xuất (nhỏ, không chặn nghiệm thu)
+- Script JS trong plan có ghi chú `// ngoài viewport → caller scroll rồi đọc lại` cho nhánh `!hit`, nhưng nhánh
+  đó trả `'covered'` mà handler Covered ở Bước 3 chỉ CHỜ chứ không scroll (scroll dành cho Unknown). Tôi đã bám
+  ĐÚNG đặc tả Bước 3 (Covered = chờ, Unknown = scroll) và giữ JS nguyên văn. Hệ quả: link nằm ngoài viewport
+  (hiếm — FindShippingLink vẫn cần box) sẽ đọc "covered" → chờ hết ~5s → Goto fallback (vẫn mở được trang, an
+  toàn). Nếu muốn tối ưu, có thể cho JS trả 'unknown' khi `!hit` để caller scroll — nhưng KHÔNG cần cho lần này.
+
+### Sửa theo nghiệm thu (panel rà soát đối kháng — 2026-07-15)
+Panel phát hiện MỘT lỗi (mức vừa, vi phạm like-human) trong nhánh Collapsed của vòng đọc readiness ở
+`OpenShippingAddressSettingsAsync`: `readyDeadline = UtcNow+5000` đặt MỘT lần trước `while`, nhưng nhánh
+Collapsed tiêu chuỗi nặng (FindOrderMenuParentAsync + click verified mục cha có poll hit-test tới 2s +
+Task.Delay 500–1500ms + FindShippingLinkAsync). Máy chậm/CDP trễ → bung mục cha THÀNH CÔNG nhưng tổng >5s →
+`while` thoát với `clickedLink=false` → rơi thẳng xuống `GotoAsync` máy móc dù link vừa hiện & sẵn sàng click
+kiểu người. Đã sửa đúng 2 ý, CHỈ trong nhánh Collapsed:
+1. KHÔNG vứt kết quả click mục cha bằng `_` nữa — hứng `bool parentActuallyClicked` từ
+   `HumanMoveAndClickVerifiedAsync`; CHỈ set `parentClicked = true` khi `parentActuallyClicked == true`
+   (hit-test fail → chuột chưa nhả → không có nguy cơ toggle → không tiêu ngân sách bung-1-lần; vòng sau vẫn
+   Collapsed sẽ thử lại trong deadline).
+2. Khi bung THÀNH CÔNG (`parentActuallyClicked == true`): reset `readyDeadline = DateTime.UtcNow.AddMilliseconds(5000)`
+   ngay sau `parentClicked = true` → cấp lại trọn 5s cho phần còn lại (chờ, tìm lại link, đọc readiness, click
+   link kiểu người), bảo đảm sau khi bung LUÔN có ≥1 lượt đọc readiness + thử click link trước khi được rơi
+   xuống Goto. Comment quanh đoạn đã cập nhật cho khớp.
+
+**Kiểm chứng lại sau sửa:** `dotnet build -p:Deterministic=false` → **0 Warning / 0 Error**;
+`dotnet test --no-build` → **Passed! Failed: 0, Passed: 279, Skipped: 0, Total: 279** (không đỏ test cũ, giữ
+nền 279). Chỉ đụng `ShopeeLoginService.cs` (nhánh Collapsed). Chưa commit.
