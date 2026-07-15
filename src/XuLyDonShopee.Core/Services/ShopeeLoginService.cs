@@ -2067,6 +2067,13 @@ public class ShopeeLoginService
             // KILL cả cây tiến trình Brave để không để lại tiến trình mồ côi giữ khóa --user-data-dir
             // (nếu còn, lần mở sau sẽ lỗi khóa hồ sơ).
             try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); } catch { /* bỏ qua */ }
+            // Chờ tiến trình thoát HẲN (giải phóng khóa hồ sơ) trước khi cho phép mở lại cùng hồ sơ.
+            try
+            {
+                using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(6));
+                await _process.WaitForExitAsync(waitCts.Token).ConfigureAwait(false);
+            }
+            catch { /* hết giờ/lỗi — bỏ qua, tầng gọi có retry */ }
             try { _process.Dispose(); } catch { /* bỏ qua */ }
 
             try { _playwright.Dispose(); } catch { /* bỏ qua */ }

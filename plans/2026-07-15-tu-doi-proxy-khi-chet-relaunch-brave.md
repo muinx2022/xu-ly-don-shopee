@@ -1,9 +1,15 @@
 # Plan: Tự đổi proxy khi chết — nhịp kiểm ~10' + relaunch Brave giữ phiên
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần chạy qua ≥1–2 lần xoay proxy 30')
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable tự chạy build (0/0) + test (**303/303**, +8 ca ProxyWatchdog); đọc toàn bộ diff
+  RunAsync + kiểm bất biến vòng đời (StopAsync khi relaunch, manager chỉ gỡ khi Stopped); chạy panel rà
+  soát đối kháng 27 agent → **2 lỗi thật + 1 lệch nhỏ**, đã sửa (mở rộng phạm vi thêm `ShopeeLoginService.cs`):
+  (1) dispose→reopen cùng hồ sơ không chờ tiến trình cũ thoát → thêm `WaitForExitAsync` 6s trong
+  `DisposeAsync` + settle+retry (≤3 lần) đường relaunch; (2) Stop giữa relaunch bị hiểu nhầm thành Error
+  (OpenAsync bọc OCE thành InvalidOperationException) → phân biệt hủy bằng `ct.IsCancellationRequested`;
+  (3) hardCap 12h reset mỗi relaunch → chuyển ra ngoài vòng (cap tuyệt đối). Sửa xong build 0/0, test 303/303.
 
 ## 1. Bối cảnh & yêu cầu
 
@@ -272,4 +278,94 @@ finally { _session = null; lock(_lifecycleLock){ if (State != SessionState.Error
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-(để trống)
+**Ngày thực thi:** 2026-07-15 · **Người thực thi:** Opus (`opus-executor`)
+
+### Đã hoàn thành (từng bước)
+
+- **Baseline (trước khi sửa):** `dotnet build -c Debug -p:Deterministic=false` → 0 Warning / 0 Error;
+  `dotnet test --no-build` → **Passed 295 / Failed 0** (đúng nền plan ghi).
+- **Bước 1 — ProxyWatchdog (Core):** Tạo mới `src/XuLyDonShopee.Core/Services/ProxyWatchdog.cs` — static
+  class, XML-doc tiếng Việt. `TryGetReplacementAsync(kiot, checker, current, recheckDelayMs, ct)` đúng logic
+  plan: `current==null`→null; sống lần 1→null; delay recheck; sống lần 2 (hồi phục)→null;
+  `SelectKiotProxyAsync` lấy thay thế; null→null; trùng endpoint (`ProxyEndpointsEqual`)→null; khác→trả proxy
+  mới. `ProxyEndpointsEqual` so Host (OrdinalIgnoreCase) + Port.
+- **Bước 2 — Field + SelectProxyAsync (App):** Trong `src/XuLyDonShopee.App/Services/AccountSession.cs` thêm
+  `private volatile ProxyEntry? _currentProxy;`, `private volatile IKiotProxyClient? _kiotClient;`,
+  `private const int ProxyRecheckDelayMs = 5000;`. Tách `SelectProxyAsync(Account? acc, CancellationToken ct)`
+  giữ NGUYÊN thứ tự 4 ưu tiên (key riêng → thủ công → key chung → IP máy) và set `_kiotClient` (null khi thủ
+  công/không key ⇒ watchdog tắt).
+- **Bước 3 — Tái cấu trúc RunAsync (App):** Bọc "mở Brave + vòng poll" trong **vòng relaunch ngoài**
+  `while (!ct.IsCancellationRequested)`. Đổi `await using(session)` → `try { … } finally { DisposeAsync;
+  if (ReferenceEquals(_session, session)) _session = null; }` để dispose mỗi vòng. Thêm block watchdog trong
+  vòng poll (điều kiện `_kiotClient is not null && !_navigating && UtcNow >= nextProxyCheck`, bật `_navigating`
+  suốt lượt kiểm, đặt lại `nextProxyCheck` jitter `Next(540,660)`s, `break` để relaunch khi có proxy mới).
+  `OpenAsync` bọc `catch (OperationCanceledException){ throw; }` trước `catch (Exception){ SetError; return; }`.
+  Watchdog cũng re-throw OCE. `ToShipCount=null` gate theo `firstOpen`. Câu StatusText tổng kết gate theo
+  `!relaunchForProxy`. GIỮ NGUYÊN: cookie 1s, zeroPageStreak≥2, nhịp đọc đơn 30' + `_navigating` +
+  firstOrderCheck/OrderRetrySec, hardCap 12h, bắt cookie chốt. `finally` NGOÀI cùng mới đặt State=Stopped.
+- **Bước 4 — Ràng buộc like-human:** Không thêm thao tác JS/stealth; luồng `OpenAsync` giữ nguyên; relaunch chỉ
+  khi `!_navigating`; watchdog dùng `SelectKiotProxyAsync` (ưu tiên `/current`, không spam `/new`).
+- **Bước 5 — Test:** Tạo `src/XuLyDonShopee.Tests/ProxyWatchdogTests.cs` — 8 ca (6 ca plan + 2 ca bổ sung:
+  "ứng viên chết → null" và "trùng endpoint → null chờ chu kỳ sau"). Dùng `QueueChecker` (hàng đợi kết quả
+  IsAlive theo đúng thứ tự gọi) + `StubKiot` (đếm CurrentCalls/NewCalls).
+
+### Kết quả kiểm chứng (số liệu thật)
+
+- `dotnet build XuLyDonShopee.sln -c Debug -p:Deterministic=false` → **Build succeeded, 0 Warning, 0 Error**.
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build` → **Passed 303 / Failed 0 / Skipped 0** (295 nền + 8 mới).
+- `dotnet test --filter FullyQualifiedName~ProxyWatchdogTests` → **Passed 8 / Failed 0**.
+- `git status --short`: đúng 3 file — `M AccountSession.cs`, `?? ProxyWatchdog.cs`, `?? ProxyWatchdogTests.cs`.
+- Grep `ClickAsync|FillAsync|Mouse.ClickAsync` trong AccountSession.cs → **0 match** (không thêm thao tác máy).
+- WDAC: build `-p:Deterministic=false` + `dotnet test --no-build` chạy được, KHÔNG gặp 0x800711C7 lần này.
+
+### Đối chiếu tiêu chí nghiệm thu
+
+- [x] ~10' (jitter `Next(540,660)`s = 9–11') tự kiểm proxy; xác nhận chết 2 lần (2× IsAliveAsync + delay 5s).
+- [x] Proxy chết → `SelectKiotProxyAsync` (ưu tiên `/current`) → relaunch Brave cùng `userDataDir` (giữ đăng nhập).
+- [x] Relaunch giữ State=Running/Opening (không Stopped giữa chừng); chỉ Stopped ở finally NGOÀI (relaunch=false /
+      hủy / lỗi). Đã xác nhận `AccountSessionManager.OnSessionChanged` chỉ gỡ khi `State==Stopped`.
+- [x] Watchdog chỉ chạy khi `_kiotClient != null` & `!_navigating`; bật `_navigating` suốt lượt kiểm; proxy thủ
+      công (`_kiotClient=null`) & IP máy (`_currentProxy=null`) → không đụng.
+- [x] Không đổi hành vi các nhịp cũ (đọc lại toàn bộ RunAsync đối chiếu bản gốc).
+- [x] Build 0/0; test 303 (295 nền + 8 ca ProxyWatchdog) pass.
+- [x] Chỉ tạo/sửa 3 file đúng phạm vi.
+
+### Vướng mắc / chưa làm được
+
+- **KHÔNG smoke live** (đúng yêu cầu): môi trường không có phiên Shopee/KiotProxy thật. Toàn bộ kiểm chứng là
+  build + test + đọc/đối chiếu code. Hành vi relaunch thực tế (đóng/mở cửa sổ, giữ đăng nhập, downtime tới ~10')
+  cần người dùng smoke qua ít nhất 1–2 lần xoay proxy 30' như plan đã nêu ở mục Rủi ro.
+
+### Đề xuất (nếu có)
+
+- Không có điều chỉnh plan cần thiết. Thêm 2 ca test ngoài 6 ca plan (ứng viên chết / trùng endpoint) để phủ
+  đủ nhánh của `TryGetReplacementAsync` — trong phạm vi ProxyWatchdog, không mở rộng ngoài plan.
+
+---
+
+## Sửa theo nghiệm thu (panel đối kháng — 2 lỗi + 1 lệch do vòng relaunch mới)
+
+**Ngày:** 2026-07-15 · Fable chỉ đạo, Opus sửa. Sửa 2 file: `ShopeeLoginService.cs` + `AccountSession.cs`.
+
+- **LỖI 1 (nghiêm trọng) — dispose→reopen cùng hồ sơ không chờ tiến trình cũ thoát:**
+  - *1A* `src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs` — `LoginSession.DisposeAsync`: sau `Kill`,
+    TRƯỚC `_process.Dispose()`, thêm `await _process.WaitForExitAsync` với `CancellationTokenSource(6s)`
+    (nuốt lỗi/timeout) để tiến trình Brave nhả khóa hồ sơ trước khi mở lại cùng `userDataDir`.
+  - *1B* `src/XuLyDonShopee.App/Services/AccountSession.cs` — khối mở Brave trong vòng relaunch: thay
+    try/catch đơn bằng vòng `for (attempt=1; session is null; attempt++)` với `MaxReopenAttempts=3`;
+    đường relaunch (`!firstOpen`) có settle `Task.Delay(800–1500ms)` trước mỗi lần thử + retry
+    `Task.Delay(2000*attempt)` khi mở hụt; lần mở ĐẦU giữ nguyên (lỗi → SetError + return ngay).
+- **LỖI 2 (vừa) — Stop giữa relaunch bị hiểu nhầm thành Error:** `OpenAsync` bọc MỌI exception (kể cả OCE)
+  thành `InvalidOperationException` nên nhánh `catch (OperationCanceledException)` riêng quanh `OpenAsync` là
+  code chết. Sửa: bỏ nhánh đó; trong `catch (Exception)` phân biệt hủy bằng `ct.IsCancellationRequested` →
+  `throw new OperationCanceledException(ct)` để catch NGOÀI xử như Dừng (về Stopped sạch, không Error).
+  (Delay settle/retry vẫn `catch (OperationCanceledException){ throw; }` vì Task.Delay ném OCE thật.)
+- **LỆCH 3 (nhỏ) — hardCap 12h reset mỗi lần relaunch:** chuyển `var hardCap = DateTime.UtcNow.AddHours(12);`
+  RA NGOÀI vòng relaunch (cạnh `proxyRng`/`firstOpen`, trước `while`) → cap tuyệt đối 12h tính từ đầu phiên
+  cho mọi lần relaunch. Các biến khác (`nextOrderCheck`, `firstOrderCheck`, `lastSaved`, `zeroPageStreak`,
+  `nextProxyCheck`) GIỮ trong vòng (reset mỗi lần mở lại — đúng).
+
+**Kiểm chứng sau sửa:** `dotnet build -c Debug -p:Deterministic=false` → **0 Warning / 0 Error** (vòng
+`for (…; session is null; …)` khiến flow-analysis narrow `session` non-null sau vòng → KHÔNG sinh cảnh báo
+nullable). `dotnet test --no-build` → **Passed 303 / Failed 0 / Skipped 0**. Vẫn chỉ đụng đúng phạm vi:
+`ShopeeLoginService.cs` (thêm 1B WaitForExit), `AccountSession.cs`, + 2 file mới của việc gốc.

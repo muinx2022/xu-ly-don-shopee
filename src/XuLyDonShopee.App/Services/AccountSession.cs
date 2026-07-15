@@ -43,6 +43,16 @@ public partial class AccountSession : ObservableObject, IAccountSession
     // (ReadToShipCountAsync có reload trang → sẽ phá thao tác điều hướng đang chạy giữa chừng).
     private volatile bool _navigating;
 
+    // Proxy đang NƯỚNG vào Brave (đặt lúc launch qua --proxy-server) — watchdog kiểm cái này còn sống không.
+    private volatile ProxyEntry? _currentProxy;
+
+    // Client nguồn KiotProxy của phiên (null nếu phiên KHÔNG dùng KiotProxy: proxy thủ công / IP máy) →
+    // watchdog CHỈ chạy khi client này != null.
+    private volatile IKiotProxyClient? _kiotClient;
+
+    // Chờ trước lần kiểm lại (xác nhận proxy chết lần 2) để chống false-negative khi mạng chập chờn.
+    private const int ProxyRecheckDelayMs = 5000;
+
     public AccountSession(
         long accountId,
         AppServices services,
@@ -314,6 +324,33 @@ public partial class AccountSession : ObservableObject, IAccountSession
     }
 
     /// <summary>
+    /// Chọn proxy theo thứ tự ưu tiên (GIỮ NGUYÊN 4 mức của luồng cũ) và ĐỒNG THỜI set
+    /// <see cref="_kiotClient"/> — client nguồn KiotProxy của phiên để watchdog canh proxy:
+    /// (1) API key KiotProxy RIÊNG của tài khoản → sticky riêng mỗi tài khoản (watchdog BẬT),
+    /// (2) danh sách proxy thủ công → round-robin BỀN, chia sẻ giữa các phiên (watchdog TẮT: <c>_kiotClient=null</c>),
+    /// (3) danh sách API key KiotProxy CHUNG trong Cài đặt (watchdog BẬT nếu có key),
+    /// (4) IP máy (null → watchdog TẮT).
+    /// </summary>
+    private async Task<ProxyEntry?> SelectProxyAsync(Account? acc, CancellationToken ct)
+    {
+        var manual = _services.Proxies.GetAll();
+        if (!string.IsNullOrWhiteSpace(acc?.ProxyKey))
+        {
+            _kiotClient = new KiotProxyClient(new[] { acc!.ProxyKey! });
+            return await ProxySelector.SelectKiotProxyAsync(_kiotClient, _healthChecker, ct).ConfigureAwait(false);
+        }
+        if (manual.Count > 0)
+        {
+            _kiotClient = null;                                   // proxy thủ công → không canh
+            return _nextManualProxy(manual);                      // round-robin BỀN, KHÔNG kiểm
+        }
+        var kiotKeys = _services.Settings.GetKiotProxyKeys();
+        _kiotClient = kiotKeys.Count == 0 ? null : new KiotProxyClient(kiotKeys);
+        return _kiotClient is null ? null
+            : await ProxySelector.SelectKiotProxyAsync(_kiotClient, _healthChecker, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Luồng chạy nền của phiên. Bê nguyên logic từ <c>OpenSellerAsync</c>; thay modal bằng trạng thái;
     /// tôn trọng <paramref name="ct"/> để dừng nhanh khi người dùng bấm Dừng / thoát app.
     /// </summary>
@@ -329,29 +366,9 @@ public partial class AccountSession : ObservableObject, IAccountSession
             var userDataDir = BrowserProfilePaths.ForAccount(baseDir, _accountId);
             Directory.CreateDirectory(userDataDir);
 
-            // 1) Chọn proxy theo thứ tự ưu tiên (GIỮ NGUYÊN):
-            //    (1) API key KiotProxy RIÊNG của tài khoản → sticky riêng mỗi tài khoản,
-            //    (2) danh sách proxy thủ công → round-robin BỀN (chia sẻ giữa các phiên),
-            //    (3) danh sách API key KiotProxy CHUNG trong Cài đặt,
-            //    (4) IP máy (null).
+            // 1) Chọn proxy theo thứ tự ưu tiên (GIỮ NGUYÊN 4 mức) + set _kiotClient để watchdog canh.
             SetStatus(SessionState.Opening, "Đang kiểm tra proxy...");
-            var manual = _services.Proxies.GetAll();
-            ProxyEntry? proxy;
-            if (!string.IsNullOrWhiteSpace(acc?.ProxyKey))
-            {
-                IKiotProxyClient kiot = new KiotProxyClient(new[] { acc!.ProxyKey! });
-                proxy = await ProxySelector.SelectKiotProxyAsync(kiot, _healthChecker, ct).ConfigureAwait(false);
-            }
-            else if (manual.Count > 0)
-            {
-                proxy = _nextManualProxy(manual); // proxy thủ công: round-robin BỀN, KHÔNG kiểm
-            }
-            else
-            {
-                var kiotKeys = _services.Settings.GetKiotProxyKeys();
-                IKiotProxyClient? kiot = kiotKeys.Count == 0 ? null : new KiotProxyClient(kiotKeys);
-                proxy = await ProxySelector.SelectKiotProxyAsync(kiot, _healthChecker, ct).ConfigureAwait(false);
-            }
+            _currentProxy = await SelectProxyAsync(acc, ct).ConfigureAwait(false);
 
             ct.ThrowIfCancellationRequested();
 
@@ -364,131 +381,227 @@ public partial class AccountSession : ObservableObject, IAccountSession
                 return;
             }
 
-            // 3) Mở cửa sổ trình duyệt (profile persistent) tới trang bán hàng.
-            ILoginSession session;
-            try
-            {
-                session = await _loginService.OpenAsync(userDataDir, proxy, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                SetError(ex.Message);
-                return;
-            }
+            // Random riêng cho nhịp watchdog: jitter 9–11' (~10') để tránh trùng đều mốc xoay 30' của KiotProxy.
+            var proxyRng = new Random();
+            bool firstOpen = true;
+            // Chốt chặn TUYỆT ĐỐI: cap an toàn 12h tính từ ĐẦU phiên, áp cho MỌI lần relaunch (KHÔNG reset mỗi
+            // lần mở lại). Tín hiệu kết thúc CHÍNH vẫn là "không còn cửa sổ nào".
+            var hardCap = DateTime.UtcNow.AddHours(12);
 
-            _session = session; // expose BraveProcess cho Plan B (focus cửa sổ)
-
-            await using (session)
+            // ===== VÒNG RELAUNCH NGOÀI =====
+            // Mỗi vòng = một lần mở Brave (với _currentProxy hiện tại) + vòng poll bên trong. Khi proxy chết,
+            // watchdog đặt relaunchForProxy=true → thoát poll → dispose Brave → quay lại mở LẠI với proxy mới.
+            // State GIỮ Running/Opening xuyên suốt, KHÔNG rơi vào finally NGOÀI giữa chừng (nếu State thành
+            // Stopped, AccountSessionManager sẽ GỠ phiên khỏi dict).
+            while (!ct.IsCancellationRequested)
             {
-                // 4) Tự đăng nhập KIỂU NGƯỜI bằng user/password của tài khoản này. Graceful: đã đăng nhập
-                //    sẵn / không thấy ô → bỏ qua.
-                if (acc is not null && !string.IsNullOrEmpty(acc.Password))
+                bool relaunchForProxy = false;
+
+                // 3) Mở cửa sổ trình duyệt (profile persistent) tới trang bán hàng.
+                SetStatus(SessionState.Opening,
+                    firstOpen ? "Đang mở cửa sổ trình duyệt..." : "Đang mở lại trình duyệt với proxy mới...");
+                // Lần mở ĐẦU: lỗi → SetError + return ngay (giữ hành vi cũ). ĐƯỜNG RELAUNCH: settle + retry vì hồ
+                // sơ persistent vừa dispose có thể chưa nhả khóa hẳn (dù DisposeAsync đã WaitForExit). Phân biệt
+                // HỦY bằng ct.IsCancellationRequested (không bằng loại exception) vì OpenAsync bọc MỌI lỗi kể cả
+                // OperationCanceledException thành InvalidOperationException.
+                const int MaxReopenAttempts = 3;
+                ILoginSession? session = null;
+                for (int attempt = 1; session is null; attempt++)
                 {
-                    SetStatus(SessionState.Running, "Đang tự đăng nhập (kiểu người)...");
-                    try { await session.TryHumanLoginAsync(acc.Email, acc.Password, ct).ConfigureAwait(false); }
-                    catch { /* không phá luồng — người dùng tự nhập tay nếu cần */ }
+                    if (!firstOpen)
+                    {
+                        // Relaunch: chờ settle để khóa hồ sơ nhả nốt (biên an toàn thêm sau WaitForExit).
+                        try { await Task.Delay(proxyRng.Next(800, 1500), ct).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { throw; }
+                    }
+                    try
+                    {
+                        session = await _loginService.OpenAsync(userDataDir, _currentProxy, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (ct.IsCancellationRequested) throw new OperationCanceledException(ct); // Dừng → catch NGOÀI xử như HỦY
+                        if (firstOpen || attempt >= MaxReopenAttempts) { SetError(ex.Message); return; }
+                        SetStatus(SessionState.Opening, $"Mở lại trình duyệt chưa được (thử {attempt}/{MaxReopenAttempts})...");
+                        try { await Task.Delay(2000 * attempt, ct).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { throw; }
+                    }
                 }
 
-                // 5) Tự bắt & lưu cookie trong lúc cửa sổ mở; kết thúc khi người dùng đóng hết cửa sổ.
-                SetStatus(SessionState.Running,
-                    "Đã mở trình duyệt. Đăng nhập xong app sẽ tự theo dõi đơn mỗi 30'; đóng cửa sổ để dừng.");
-                ToShipCount = null;
+                _session = session; // expose BraveProcess cho Plan B (focus cửa sổ)
 
-                string? lastSaved = null;
-                const int PollMs = 1000;
-                const int OrderIntervalMin = 30;
-                const int OrderRetrySec = 30;
-                var nextOrderCheck = DateTime.UtcNow;
-                bool firstOrderCheck = true;
-                // Chốt chặn: cap an toàn dài (12h). Tín hiệu kết thúc CHÍNH vẫn là "không còn cửa sổ nào".
-                var hardCap = DateTime.UtcNow.AddHours(12);
-                // Cần 0 cửa sổ ở 2 vòng poll LIÊN TIẾP mới coi là đã đóng (tránh thoát nhầm lúc chuyển trang).
-                int zeroPageStreak = 0;
-
-                while (!session.IsClosed && DateTime.UtcNow < hardCap && !ct.IsCancellationRequested)
+                try
                 {
-                    await Task.WhenAny(session.Closed, Task.Delay(PollMs, ct)).ConfigureAwait(false);
-
-                    if (ct.IsCancellationRequested)
+                    // 4) Tự đăng nhập KIỂU NGƯỜI bằng user/password của tài khoản này. Graceful: đã đăng nhập
+                    //    sẵn / không thấy ô → bỏ qua. (Relaunch khi đã login trong hồ sơ → thường no-op.)
+                    if (acc is not null && !string.IsNullOrEmpty(acc.Password))
                     {
-                        break;
+                        SetStatus(SessionState.Running, "Đang tự đăng nhập (kiểu người)...");
+                        try { await session.TryHumanLoginAsync(acc.Email, acc.Password, ct).ConfigureAwait(false); }
+                        catch { /* không phá luồng — người dùng tự nhập tay nếu cần */ }
                     }
 
-                    if (session.OpenPageCount == 0)
+                    // 5) Tự bắt & lưu cookie trong lúc cửa sổ mở; kết thúc khi người dùng đóng hết cửa sổ.
+                    SetStatus(SessionState.Running,
+                        "Đã mở trình duyệt. Đăng nhập xong app sẽ tự theo dõi đơn mỗi 30'; đóng cửa sổ để dừng.");
+                    if (firstOpen)
                     {
-                        if (++zeroPageStreak >= 2)
+                        ToShipCount = null; // reset CHỈ ở lần mở đầu; relaunch giữ số cũ (nhịp đọc đơn tự làm mới).
+                    }
+
+                    string? lastSaved = null;
+                    const int PollMs = 1000;
+                    const int OrderIntervalMin = 30;
+                    const int OrderRetrySec = 30;
+                    var nextOrderCheck = DateTime.UtcNow;
+                    bool firstOrderCheck = true;
+                    // Cần 0 cửa sổ ở 2 vòng poll LIÊN TIẾP mới coi là đã đóng (tránh thoát nhầm lúc chuyển trang).
+                    int zeroPageStreak = 0;
+                    // Nhịp watchdog proxy: kiểm proxy đang gán còn sống không, jitter 9–11' (~10').
+                    var nextProxyCheck = DateTime.UtcNow.AddSeconds(proxyRng.Next(540, 660));
+
+                    while (!session.IsClosed && DateTime.UtcNow < hardCap && !ct.IsCancellationRequested)
+                    {
+                        await Task.WhenAny(session.Closed, Task.Delay(PollMs, ct)).ConfigureAwait(false);
+
+                        if (ct.IsCancellationRequested)
                         {
                             break;
                         }
-                    }
-                    else
-                    {
-                        zeroPageStreak = 0;
-                    }
 
-                    string json;
-                    try { json = await session.CaptureCookiesJsonAsync().ConfigureAwait(false); }
-                    catch { break; } // context đã đóng giữa chừng
-
-                    // CHỈ lưu khi đã có cookie ĐĂNG NHẬP Shopee (tránh đè cookie hợp lệ cũ bằng cookie theo dõi).
-                    if (!string.IsNullOrEmpty(json) && json != lastSaved && ShopeeLoginCookies.IsLoggedIn(json))
-                    {
-                        if (TrySaveCookie(json))
+                        if (session.OpenPageCount == 0)
                         {
-                            lastSaved = json;
-                        }
-                    }
-
-                    // Nhịp theo dõi đơn "Chờ Lấy Hàng": tới hạn thì reload + đọc số. Lần đầu KHÔNG reload.
-                    // Đang điều hướng xử lý đơn (_navigating) → BỎ QUA nhịp này (reload sẽ phá thao tác giữa chừng).
-                    if (!_navigating && DateTime.UtcNow >= nextOrderCheck)
-                    {
-                        // GIỮ cờ _navigating suốt lượt đọc (có thể kéo dài ~38s: reload 30s + poll 8s) để
-                        // loại trừ HAI CHIỀU với nút Kiểm tra / Xử lý đơn — không cho Goto/click tay chạy
-                        // chồng lên lượt reload đang bay trên cùng trang (hai bên cùng fail ảo).
-                        _navigating = true;
-                        int? count;
-                        try
-                        {
-                            count = await session.ReadToShipCountAsync(reload: !firstOrderCheck, ct).ConfigureAwait(false);
-                        }
-                        finally
-                        {
-                            _navigating = false;
-                        }
-
-                        if (count is int n)
-                        {
-                            firstOrderCheck = false;
-                            ToShipCount = n; // VM tự định dạng dòng hiển thị theo số này
-                            nextOrderCheck = DateTime.UtcNow.AddMinutes(OrderIntervalMin); // đã đăng nhập → 30'
+                            if (++zeroPageStreak >= 2)
+                            {
+                                break;
+                            }
                         }
                         else
                         {
-                            // Chưa đăng nhập / chưa đọc được → thử lại sớm, KHÔNG reload.
-                            nextOrderCheck = DateTime.UtcNow.AddSeconds(OrderRetrySec);
+                            zeroPageStreak = 0;
                         }
-                    }
-                }
 
-                // Lần bắt cookie CHỐT trước khi dispose (đăng nhập xong đóng cửa sổ ngay vẫn bắt kịp).
-                try
-                {
-                    var json = await session.CaptureCookiesJsonAsync().ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(json) && json != lastSaved && ShopeeLoginCookies.IsLoggedIn(json))
-                    {
-                        if (TrySaveCookie(json))
+                        string json;
+                        try { json = await session.CaptureCookiesJsonAsync().ConfigureAwait(false); }
+                        catch { break; } // context đã đóng giữa chừng
+
+                        // CHỈ lưu khi đã có cookie ĐĂNG NHẬP Shopee (tránh đè cookie hợp lệ cũ bằng cookie theo dõi).
+                        if (!string.IsNullOrEmpty(json) && json != lastSaved && ShopeeLoginCookies.IsLoggedIn(json))
                         {
-                            lastSaved = json;
+                            if (TrySaveCookie(json))
+                            {
+                                lastSaved = json;
+                            }
+                        }
+
+                        // Nhịp theo dõi đơn "Chờ Lấy Hàng": tới hạn thì reload + đọc số. Lần đầu KHÔNG reload.
+                        // Đang điều hướng xử lý đơn (_navigating) → BỎ QUA nhịp này (reload sẽ phá thao tác giữa chừng).
+                        if (!_navigating && DateTime.UtcNow >= nextOrderCheck)
+                        {
+                            // GIỮ cờ _navigating suốt lượt đọc (có thể kéo dài ~38s: reload 30s + poll 8s) để
+                            // loại trừ HAI CHIỀU với nút Kiểm tra / Xử lý đơn — không cho Goto/click tay chạy
+                            // chồng lên lượt reload đang bay trên cùng trang (hai bên cùng fail ảo).
+                            _navigating = true;
+                            int? count;
+                            try
+                            {
+                                count = await session.ReadToShipCountAsync(reload: !firstOrderCheck, ct).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                _navigating = false;
+                            }
+
+                            if (count is int n)
+                            {
+                                firstOrderCheck = false;
+                                ToShipCount = n; // VM tự định dạng dòng hiển thị theo số này
+                                nextOrderCheck = DateTime.UtcNow.AddMinutes(OrderIntervalMin); // đã đăng nhập → 30'
+                            }
+                            else
+                            {
+                                // Chưa đăng nhập / chưa đọc được → thử lại sớm, KHÔNG reload.
+                                nextOrderCheck = DateTime.UtcNow.AddSeconds(OrderRetrySec);
+                            }
+                        }
+
+                        // ===== NHỊP WATCHDOG PROXY (~10') =====
+                        // CHỈ với phiên nguồn KiotProxy (_kiotClient != null) và khi KHÔNG đang điều hướng
+                        // (loại trừ với đọc đơn / nút Kiểm tra / Xử lý đơn). Bật _navigating SUỐT lượt kiểm
+                        // (health-check tối đa ~8s×2 + 5s ⇒ ~21s) để không thao tác nào chạy chồng lên.
+                        if (_kiotClient is not null && !_navigating && DateTime.UtcNow >= nextProxyCheck)
+                        {
+                            _navigating = true;
+                            try
+                            {
+                                var replacement = await ProxyWatchdog.TryGetReplacementAsync(
+                                    _kiotClient, _healthChecker, _currentProxy, ProxyRecheckDelayMs, ct).ConfigureAwait(false);
+                                if (replacement is not null)
+                                {
+                                    _currentProxy = replacement;
+                                    relaunchForProxy = true;
+                                }
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                throw; // Dừng chủ động → để catch NGOÀI xử như HỦY.
+                            }
+                            catch
+                            {
+                                /* watchdog lỗi (mạng/API) → bỏ qua, thử lại chu kỳ sau */
+                            }
+                            finally
+                            {
+                                _navigating = false;
+                            }
+
+                            nextProxyCheck = DateTime.UtcNow.AddSeconds(proxyRng.Next(540, 660));
+                            if (relaunchForProxy)
+                            {
+                                SetStatus(SessionState.Running, "Proxy cũ chết — đang đổi proxy, mở lại trình duyệt...");
+                                break; // thoát poll → dispose Brave → relaunch với proxy mới
+                            }
                         }
                     }
-                }
-                catch { /* browser đã chết hẳn — bỏ qua */ }
 
-                // Kết quả trung thực (KHÔNG khẳng định "chưa đăng nhập").
-                StatusText = lastSaved != null
-                    ? "Đã lưu cookie đăng nhập vào tài khoản."
-                    : "Chưa lưu được cookie. Nếu đã đăng nhập, phiên vẫn được giữ trong hồ sơ (lần sau mở lại vẫn còn).";
+                    // Lần bắt cookie CHỐT trước khi dispose (đăng nhập xong đóng cửa sổ ngay vẫn bắt kịp).
+                    try
+                    {
+                        var json = await session.CaptureCookiesJsonAsync().ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(json) && json != lastSaved && ShopeeLoginCookies.IsLoggedIn(json))
+                        {
+                            if (TrySaveCookie(json))
+                            {
+                                lastSaved = json;
+                            }
+                        }
+                    }
+                    catch { /* browser đã chết hẳn — bỏ qua */ }
+
+                    // Kết quả trung thực (KHÔNG khẳng định "chưa đăng nhập"). Relaunch đổi proxy → GIỮ status
+                    // "đang đổi proxy" (đã đặt ở trên), KHÔNG đè bằng câu tổng kết.
+                    if (!relaunchForProxy)
+                    {
+                        StatusText = lastSaved != null
+                            ? "Đã lưu cookie đăng nhập vào tài khoản."
+                            : "Chưa lưu được cookie. Nếu đã đăng nhập, phiên vẫn được giữ trong hồ sơ (lần sau mở lại vẫn còn).";
+                    }
+                }
+                finally
+                {
+                    // Dispose (kill Brave) sau MỖI vòng — dù kết thúc bình thường hay để relaunch với proxy mới.
+                    try { await session.DisposeAsync().ConfigureAwait(false); } catch { /* đã chết — bỏ qua */ }
+                    if (ReferenceEquals(_session, session))
+                    {
+                        _session = null;
+                    }
+                }
+
+                if (!relaunchForProxy)
+                {
+                    break; // kết thúc bình thường (đóng cửa sổ / hết giờ) → ra ngoài → finally NGOÀI → Stopped
+                }
+                firstOpen = false; // vòng sau: relaunch với _currentProxy mới
             }
         }
         catch (OperationCanceledException)
