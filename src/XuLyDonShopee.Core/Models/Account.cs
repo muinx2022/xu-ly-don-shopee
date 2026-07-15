@@ -25,6 +25,9 @@ public class Account
     /// <summary>API key KiotProxy riêng của tài khoản (tùy chọn). Có → mở trang bán hàng dùng proxy sticky theo key này.</summary>
     public string? ProxyKey { get; set; }
 
+    /// <summary>Địa chỉ lấy hàng mặc định (tỉnh/thành, chọn từ danh sách cố định trên form). Null = chưa chọn → app coi như Thanh Hóa.</summary>
+    public string? PickupAddress { get; set; }
+
     /// <summary>Trạng thái tài khoản.</summary>
     public AccountStatus Status { get; set; } = AccountStatus.ChuaKiemTra;
 

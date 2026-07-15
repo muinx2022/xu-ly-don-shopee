@@ -1,7 +1,9 @@
 # Plan: Card "Địa chỉ lấy hàng mặc định" trong form chi tiết tài khoản
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành
+- **Nghiệm thu:** Fable soi diff (SELECT ↔ Map khớp: PickupAddress=7, Status/CreatedAt/UpdatedAt=8/9/10;
+  card đúng vị trí giữa PROXY và Card 3; không đụng hàng nút) + tự chạy test: **211/211 pass**.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, trên cây làm việc chính)
 
 ## 1. Bối cảnh & mục tiêu
@@ -140,4 +142,29 @@ KHÔNG sửa bất kỳ phần nào khác của file (đặc biệt hàng nút h
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây.>
+**Ngày thực thi:** 2026-07-15 · Trên cây làm việc chính (`d:\Projects\Xu-ly-don-shopee`).
+
+### Đã hoàn thành
+
+- **Bước 1 — Model + DB + Repository:**
+  - `src/XuLyDonShopee.Core/Models/Account.cs`: thêm `public string? PickupAddress { get; set; }` (đặt sau `ProxyKey`) kèm XML-doc đúng như plan.
+  - `src/XuLyDonShopee.Core/Data/Database.cs`: thêm `PickupAddress TEXT` vào CREATE TABLE (sau `ProxyKey`); thêm `EnsureColumn(conn, "accounts", "PickupAddress", "TEXT");` sau dòng ProxyKey.
+  - `src/XuLyDonShopee.Core/Data/AccountRepository.cs`: thêm `PickupAddress` vào SELECT của GetAll + GetById (ngay sau `ProxyKey`), INSERT (cột + `$pickupAddress`), UPDATE (SET), `BindWritableFields` (`$pickupAddress` ← `(object?)a.PickupAddress ?? DBNull.Value`), và `Map` (index 7; Status→8, CreatedAt→9, UpdatedAt→10). Thứ tự cột SELECT khớp với Map.
+- **Bước 2 — ViewModel** (`src/XuLyDonShopee.App/ViewModels/AccountsViewModel.cs`): thêm hằng `DefaultPickupAddress = "Thanh Hóa"`, `PickupAddressOptions` (["Hà Nội", "TP Hồ Chí Minh", "Thanh Hóa"]), `[ObservableProperty] _editPickupAddress = DefaultPickupAddress`; `LoadIntoForm` map giá trị lạ/null về mặc định qua `PickupAddressOptions.Contains(...)`; `ClearForm` reset về mặc định; `Save` ghi `PickupAddress = EditPickupAddress` ở cả nhánh Insert lẫn Update.
+- **Bước 3 — UI** (`src/XuLyDonShopee.App/Views/AccountsView.axaml`): chèn card "ĐỊA CHỈ LẤY HÀNG" (ComboBox binding `EditPickupAddress`, ItemsSource `PickupAddressOptions`) GIỮA card PROXY và Card 3. KHÔNG đụng hàng nút hành động (nút "Xử lý đơn" giữ nguyên).
+- **Bước 4 — Test:** thêm 4 test repository, 2 test migration (+ 1 assert PickupAddress vào test idempotent sẵn có), 4 test ViewModel như plan.
+
+### Kết quả kiểm chứng
+
+- `dotnet build XuLyDonShopee.sln -c Debug` → **Build succeeded, 0 Warning, 0 Error**.
+- Rebuild `--no-incremental -p:Deterministic=false` → 0 Warning/0 Error (né WDAC hash).
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build` → **Passed! Failed: 0, Passed: 211, Skipped: 0** (nền 201 + 10 test mới). Không gặp WDAC 0x800711C7 lần chạy này.
+- `git status --short`: đúng 8 file trong phạm vi plan (5 nguồn + 3 test), không dư file nào.
+
+### Vướng mắc/bỏ dở
+
+- Không có. Hoàn thành toàn bộ plan.
+
+### Đề xuất
+
+- Không có điểm lệch plan. (Ghi chú nhỏ: mục 3 dòng "nền 166 + test mới" ở Bước 4 không khớp con số nền thực tế; số nền đúng là **201** như ghi ở đầu mục 3 và mục Rủi ro — sau việc này là 211.)

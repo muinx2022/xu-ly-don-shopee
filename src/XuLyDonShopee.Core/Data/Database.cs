@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     Cookie     TEXT,
     Note       TEXT,
     ProxyKey   TEXT,
+    PickupAddress TEXT,
     Status     TEXT NOT NULL,
     CreatedAt  TEXT NOT NULL,
     UpdatedAt  TEXT NOT NULL
@@ -86,8 +87,9 @@ CREATE TABLE IF NOT EXISTS settings (
         cmd.ExecuteNonQuery();
 
         // Migration cho DB CŨ đã tồn tại: CREATE TABLE IF NOT EXISTS ở trên KHÔNG sửa bảng cũ, nên
-        // thêm cột ProxyKey bằng ALTER TABLE ADD COLUMN (không phá dữ liệu người dùng đang có).
+        // thêm cột mới bằng ALTER TABLE ADD COLUMN (không phá dữ liệu người dùng đang có).
         EnsureColumn(conn, "accounts", "ProxyKey", "TEXT");
+        EnsureColumn(conn, "accounts", "PickupAddress", "TEXT");
     }
 
     /// <summary>

@@ -122,6 +122,80 @@ public class AccountRepositoryTests
     }
 
     [Fact]
+    public void Insert_CoPickupAddress_RoiGetById_TraVePickupAddress()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        var account = new Account { Email = "pa@x.com", Password = "1", PickupAddress = "Hà Nội" };
+        var id = repo.Insert(account);
+
+        var loaded = repo.GetById(id);
+        Assert.NotNull(loaded);
+        Assert.Equal("Hà Nội", loaded!.PickupAddress);
+    }
+
+    [Fact]
+    public void Insert_KhongCoPickupAddress_TraVeNull()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        var id = repo.Insert(new Account { Email = "pb@x.com", Password = "1" });
+
+        var loaded = repo.GetById(id);
+        Assert.NotNull(loaded);
+        Assert.Null(loaded!.PickupAddress);
+    }
+
+    [Fact]
+    public void Update_ThayDoiPickupAddress_LuuDung_VaXoaVeNull()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        var account = new Account { Email = "pc@x.com", Password = "1", ProxyKey = "K1" };
+        repo.Insert(account);
+
+        // Gán giá trị mới → đọc lại đúng.
+        account.PickupAddress = "TP Hồ Chí Minh";
+        repo.Update(account);
+        Assert.Equal("TP Hồ Chí Minh", repo.GetById(account.Id)!.PickupAddress);
+
+        // Xóa (null) → đọc lại null; các trường lân cận (ProxyKey/Email/Status) KHÔNG bị lệch chỉ số.
+        account.PickupAddress = null;
+        repo.Update(account);
+        var reloaded = repo.GetById(account.Id)!;
+        Assert.Null(reloaded.PickupAddress);
+        Assert.Equal("K1", reloaded.ProxyKey);
+        Assert.Equal("pc@x.com", reloaded.Email);
+    }
+
+    [Fact]
+    public void Insert_ProxyKeyVaPickupAddress_KhongLanChiSoCot()
+    {
+        using var temp = new TempDatabase();
+        var repo = new AccountRepository(temp.Open());
+
+        // Hai cột TEXT liền nhau (ProxyKey, PickupAddress) đặt giá trị KHÁC nhau để bắt lệch SELECT/Map.
+        var account = new Account
+        {
+            Email = "pd@x.com",
+            Password = "pw",
+            ProxyKey = "KIOT-XYZ",
+            PickupAddress = "Thanh Hóa",
+            Status = AccountStatus.BiKhoa
+        };
+        var id = repo.Insert(account);
+
+        var loaded = repo.GetById(id)!;
+        Assert.Equal("KIOT-XYZ", loaded.ProxyKey);
+        Assert.Equal("Thanh Hóa", loaded.PickupAddress);
+        Assert.Equal(AccountStatus.BiKhoa, loaded.Status);
+        Assert.Equal("pd@x.com", loaded.Email);
+    }
+
+    [Fact]
     public void Delete_XoaKhoiDb()
     {
         using var temp = new TempDatabase();

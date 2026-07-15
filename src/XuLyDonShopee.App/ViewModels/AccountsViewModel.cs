@@ -50,6 +50,12 @@ public partial class AccountsViewModel : ViewModelBase
         AccountStatus.BiKhoa
     };
 
+    /// <summary>Giá trị mặc định của địa chỉ lấy hàng khi tài khoản chưa chọn.</summary>
+    public const string DefaultPickupAddress = "Thanh Hóa";
+
+    /// <summary>Danh sách cố định địa chỉ lấy hàng cho ComboBox trên form.</summary>
+    public static string[] PickupAddressOptions { get; } = ["Hà Nội", "TP Hồ Chí Minh", "Thanh Hóa"];
+
     [ObservableProperty]
     private string _searchText = string.Empty;
 
@@ -82,6 +88,10 @@ public partial class AccountsViewModel : ViewModelBase
     /// <summary>API key KiotProxy riêng của tài khoản (để trống = dùng cấu hình chung / IP máy).</summary>
     [ObservableProperty]
     private string _editProxyKey = string.Empty;
+
+    /// <summary>Địa chỉ lấy hàng mặc định của tài khoản (chọn từ <see cref="PickupAddressOptions"/>).</summary>
+    [ObservableProperty]
+    private string _editPickupAddress = DefaultPickupAddress;
 
     [ObservableProperty]
     private AccountStatus _editStatus = AccountStatus.ChuaKiemTra;
@@ -376,6 +386,7 @@ public partial class AccountsViewModel : ViewModelBase
                 Cookie = NullIfEmpty(EditCookie),
                 Note = NullIfEmpty(EditNote),
                 ProxyKey = NullIfEmpty(EditProxyKey),
+                PickupAddress = EditPickupAddress,
                 Status = EditStatus
             };
             _services.Accounts.Insert(account);
@@ -397,6 +408,7 @@ public partial class AccountsViewModel : ViewModelBase
             existing.Cookie = NullIfEmpty(EditCookie);
             existing.Note = NullIfEmpty(EditNote);
             existing.ProxyKey = NullIfEmpty(EditProxyKey);
+            existing.PickupAddress = EditPickupAddress;
             existing.Status = EditStatus;
             _services.Accounts.Update(existing);
             account = existing;
@@ -715,6 +727,10 @@ public partial class AccountsViewModel : ViewModelBase
         EditCookie = a.Cookie ?? string.Empty;
         EditNote = a.Note ?? string.Empty;
         EditProxyKey = a.ProxyKey ?? string.Empty;
+        // Giá trị lạ/null (bản ghi cũ hoặc ngoài danh sách) → về mặc định, tránh ComboBox trống.
+        EditPickupAddress = PickupAddressOptions.Contains(a.PickupAddress ?? "")
+            ? a.PickupAddress!
+            : DefaultPickupAddress;
         EditStatus = a.Status;
         CreatedAtText = FormatDate(a.CreatedAt);
         UpdatedAtText = FormatDate(a.UpdatedAt);
@@ -732,6 +748,7 @@ public partial class AccountsViewModel : ViewModelBase
         EditCookie = string.Empty;
         EditNote = string.Empty;
         EditProxyKey = string.Empty;
+        EditPickupAddress = DefaultPickupAddress;
         EditStatus = AccountStatus.ChuaKiemTra;
         CreatedAtText = null;
         UpdatedAtText = null;

@@ -249,6 +249,19 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- Card: Địa chỉ lấy hàng mặc định (dùng cho xử lý đơn sau này) -->
+                    <Border Classes="card" Padding="24,22" Margin="0,0,0,16">
+                        <StackPanel Spacing="12">
+                            <TextBlock Classes="section" Text="ĐỊA CHỈ LẤY HÀNG" />
+                            <StackPanel>
+                                <TextBlock Classes="fieldLabel" Text="Địa chỉ lấy hàng mặc định" />
+                                <ComboBox Classes="field" HorizontalAlignment="Stretch"
+                                          ItemsSource="{x:Static vm:AccountsViewModel.PickupAddressOptions}"
+                                          SelectedItem="{Binding EditPickupAddress}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <!-- Card 3: Ghi chú + Trạng thái + Ngày -->
                     <Border Classes="card" Padding="24,22" Margin="0,0,0,22">
                         <StackPanel Spacing="16">

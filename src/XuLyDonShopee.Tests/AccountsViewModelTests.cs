@@ -437,4 +437,67 @@ public class AccountsViewModelTests
         Assert.True(vm.Accounts.First(r => r.Email == "abc@mail.com").IsSelected);
     }
 
+    // ===== Địa chỉ lấy hàng: tạo mới không đụng gì → DB lưu mặc định "Thanh Hóa" =====
+    [Fact]
+    public void Save_TaoMoi_MacDinhPickupAddressThanhHoa()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+
+        var vm = new AccountsViewModel(services);
+        vm.AddCommand.Execute(null);
+        Assert.Equal(AccountsViewModel.DefaultPickupAddress, vm.EditPickupAddress); // form mặc định
+        vm.EditEmail = "new@mail.com";
+        vm.EditPassword = "123";
+        vm.SaveCommand.Execute(null);
+
+        Assert.Null(vm.ErrorMessage);
+        Assert.Equal("Thanh Hóa", services.Accounts.GetAll().Single().PickupAddress);
+    }
+
+    // ===== Địa chỉ lấy hàng: tài khoản có "Hà Nội" → LoadIntoForm hiện "Hà Nội" =====
+    [Fact]
+    public void LoadIntoForm_TaiKhoanCoHaNoi_FormHienHaNoi()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p", PickupAddress = "Hà Nội" });
+
+        var vm = new AccountsViewModel(services);
+        vm.SelectedRow = vm.Accounts.First();
+
+        Assert.Equal("Hà Nội", vm.EditPickupAddress);
+    }
+
+    // ===== Địa chỉ lấy hàng: bản ghi cũ (null) → form hiện mặc định "Thanh Hóa" =====
+    [Fact]
+    public void LoadIntoForm_PickupAddressNull_FormHienThanhHoa()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" }); // PickupAddress = null
+
+        var vm = new AccountsViewModel(services);
+        vm.SelectedRow = vm.Accounts.First();
+
+        Assert.Equal("Thanh Hóa", vm.EditPickupAddress);
+    }
+
+    // ===== Địa chỉ lấy hàng: đổi sang "TP Hồ Chí Minh" → Save → DB đúng =====
+    [Fact]
+    public void Save_DoiPickupAddress_GhiDungDb()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p", PickupAddress = "Hà Nội" });
+
+        var vm = new AccountsViewModel(services);
+        vm.SelectedRow = vm.Accounts.First();
+        vm.EditPickupAddress = "TP Hồ Chí Minh";
+        vm.SaveCommand.Execute(null);
+
+        Assert.Null(vm.ErrorMessage);
+        Assert.Equal("TP Hồ Chí Minh", services.Accounts.GetAll().Single().PickupAddress);
+    }
+
 }

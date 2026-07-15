@@ -119,5 +119,48 @@ CREATE TABLE accounts (
 
         Assert.Null(ex);
         Assert.True(HasColumn(temp.Path, "accounts", "ProxyKey"));
+        Assert.True(HasColumn(temp.Path, "accounts", "PickupAddress"));
+    }
+
+    [Fact]
+    public void KhoiTao_DbCu_ThieuPickupAddress_DuocThemCot_KhongMatDuLieu()
+    {
+        using var temp = new TempDatabase();
+        CreateOldSchemaWithRow(temp.Path, "old@x.com");
+
+        // Trước migration: schema cũ chưa có cột PickupAddress.
+        Assert.False(HasColumn(temp.Path, "accounts", "PickupAddress"));
+
+        // Khởi tạo Database mới trỏ cùng file → Initialize() chạy migration.
+        _ = new Database(temp.Path);
+
+        // Sau migration: đã có cột PickupAddress.
+        Assert.True(HasColumn(temp.Path, "accounts", "PickupAddress"));
+
+        // Dữ liệu cũ CÒN NGUYÊN; PickupAddress mặc định null.
+        var repo = new AccountRepository(new Database(temp.Path));
+        var all = repo.GetAll();
+        Assert.Single(all);
+        var acc = all[0];
+        Assert.Equal("old@x.com", acc.Email);
+        Assert.Equal("cookie-cu", acc.Cookie);
+        Assert.Equal("ghi chu cu", acc.Note);
+        Assert.Equal(AccountStatus.HoatDong, acc.Status);
+        Assert.Null(acc.PickupAddress);
+    }
+
+    [Fact]
+    public void KhoiTao_DbCu_SauMigration_GhiDocPickupAddressBinhThuong()
+    {
+        using var temp = new TempDatabase();
+        CreateOldSchemaWithRow(temp.Path, "old@x.com");
+
+        var repo = new AccountRepository(new Database(temp.Path)); // migration chạy tại đây
+        var acc = repo.GetAll()[0];
+
+        acc.PickupAddress = "Hà Nội";
+        repo.Update(acc);
+
+        Assert.Equal("Hà Nội", repo.GetById(acc.Id)!.PickupAddress);
     }
 }
