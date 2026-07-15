@@ -146,6 +146,13 @@ public partial class AccountsViewModel : ViewModelBase
     public bool CanProcessOrders => _editingId is long pid
                                     && _services.Sessions.Get(pid) is { State: SessionState.Running, ToShipCount: > 0 };
 
+    /// <summary>
+    /// Cho "Kiểm tra" (về trang chủ + đọc số Chờ Lấy Hàng NGAY) khi tài khoản đang chọn có phiên ĐANG
+    /// chạy — bất kể ToShipCount là mấy (kiểm tra là làm tươi số, cho phép cả khi đang 0/chưa có). Không
+    /// có phiên chạy → tắt nút (chưa có cửa sổ để đọc).
+    /// </summary>
+    public bool CanCheckOrders => _editingId is long cid && _services.Sessions.IsRunning(cid);
+
     /// <summary>Id của tài khoản đang được nạp trong form (null = form trống / tạo mới).</summary>
     private long? _editingId;
 
@@ -155,6 +162,7 @@ public partial class AccountsViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanOpenSeller));
         OnPropertyChanged(nameof(CanStopSeller));
         OnPropertyChanged(nameof(CanProcessOrders));
+        OnPropertyChanged(nameof(CanCheckOrders));
     }
 
     partial void OnIsNewChanged(bool value)
@@ -162,6 +170,7 @@ public partial class AccountsViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanOpenSeller));
         OnPropertyChanged(nameof(CanStopSeller));
         OnPropertyChanged(nameof(CanProcessOrders));
+        OnPropertyChanged(nameof(CanCheckOrders));
     }
 
     partial void OnEditCookieChanged(string value)
@@ -547,6 +556,30 @@ public partial class AccountsViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// "Kiểm tra" — kích hoạt thủ công việc theo dõi đơn: trong phiên đang chạy của tài khoản đang chọn,
+    /// điều hướng về trang chủ Seller rồi đọc số "Chờ Lấy Hàng" NGAY (không đợi chu kỳ 30'). Đọc
+    /// <see cref="_editingId"/> vào biến cục bộ TRƯỚC await (field mutable có thể đổi khi người dùng chuyển
+    /// chọn trong lúc chờ); kết quả hiển thị tự nhiên qua StatusText/ToShipCount của phiên (đổ về
+    /// <see cref="BusyStatus"/>/<see cref="OrderStatus"/>), KHÔNG mở modal.
+    /// </summary>
+    [RelayCommand]
+    private async Task CheckOrdersAsync()
+    {
+        if (_editingId is not long id)
+        {
+            return;
+        }
+
+        var session = _services.Sessions.Get(id);
+        if (session is null)
+        {
+            return;
+        }
+
+        await session.CheckOrdersAsync();
+    }
+
+    /// <summary>
     /// Xử lý sự kiện đổi trạng thái của các phiên (có thể đến từ thread nền) — marshal về UI thread rồi
     /// đổ trạng thái phiên của tài khoản đang chọn vào ô hiển thị + cập nhật nút.
     /// </summary>
@@ -603,6 +636,7 @@ public partial class AccountsViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanOpenSeller));
         OnPropertyChanged(nameof(CanStopSeller));
         OnPropertyChanged(nameof(CanProcessOrders));
+        OnPropertyChanged(nameof(CanCheckOrders));
     }
 
     /// <summary>Định dạng dòng theo dõi đơn "Chờ Lấy Hàng" từ số đọc được (null = ẩn).</summary>

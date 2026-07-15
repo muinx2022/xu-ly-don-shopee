@@ -60,6 +60,20 @@ public interface ILoginSession : IAsyncDisposable
     Task<int?> ReadToShipCountAsync(bool reload, CancellationToken ct = default);
 
     /// <summary>
+    /// <b>Về trang chủ Seller rồi đọc lại số "Chờ Lấy Hàng" ngay:</b> điều hướng tab hiện tại về trang chủ
+    /// Seller Centre (<see cref="ShopeeLoginService.SellerUrl"/>) bằng <see cref="IPage.GotoAsync"/> —
+    /// tương đương người gõ URL / bấm bookmark (hành vi bình thường, <b>KHÔNG</b> click máy vào element) —
+    /// kèm khoảng dừng "đọc trang" ngẫu nhiên trước/sau, rồi đọc số "Chờ Lấy Hàng" từ to-do box qua
+    /// <see cref="ReadToShipCountAsync"/> với <c>reload=false</c> (trang vừa load nên không reload lại).
+    /// Dùng cho việc kiểm tra đơn THỦ CÔNG (không đợi chu kỳ 30').
+    /// <para>
+    /// <b>Graceful — không bao giờ ném:</b> chưa đăng nhập, không có trang, không đọc được, hoặc bất kỳ
+    /// lỗi nào → trả <c>null</c> (KHÔNG phá phiên). Trả về số đơn (≥ 0) khi đọc được.
+    /// </para>
+    /// </summary>
+    Task<int?> GoHomeAndReadToShipCountAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// <b>Bước đầu xử lý đơn:</b> ở menu trái (nhóm "Quản Lý Đơn Hàng") tìm &amp; bấm link
     /// <b>"Cài Đặt Vận Chuyển"</b>, chờ trang cài đặt vận chuyển mở rồi bấm tab <b>"Địa Chỉ"</b> —
     /// <b>toàn bộ bằng thao tác kiểu người</b> (di chuột theo đường cong <see cref="HumanMouse"/>, click
@@ -697,6 +711,50 @@ public class ShopeeLoginService
         private const string ToShipHrefTitleSelector =
             "a[href*='type=toship'][href*='to_process'] .item-title";
         private const string ToShipDescText = "Chờ Lấy Hàng";
+
+        public async Task<int?> GoHomeAndReadToShipCountAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return null;
+                }
+
+                // Random nội bộ (app dùng ngẫu nhiên thật, đồng bộ style các thao tác kiểu người).
+                var rng = new Random();
+
+                // Dừng "đọc trang" trước khi về trang chủ (giống người gõ URL / bấm bookmark rồi đọc).
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // Về trang chủ Seller: Goto như người gõ URL / bấm bookmark (KHÔNG click máy vào element).
+                // Nuốt lỗi điều hướng — vẫn thử đọc số bên dưới.
+                try
+                {
+                    await page.GotoAsync(SellerUrl, new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.DOMContentLoaded,
+                        Timeout = 30000
+                    }).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Nuốt lỗi điều hướng (timeout/context ngắt) — vẫn thử đọc to-do box.
+                }
+
+                // Dừng "đọc trang" sau khi về trang chủ (để to-do box render).
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // Trang vừa load → KHÔNG reload nữa (ReadToShipCountAsync tự gate IsLoggedIn + poll to-do box).
+                return await ReadToShipCountAsync(reload: false, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Bất kỳ lỗi nào (context ngắt, hủy...) → null, KHÔNG phá phiên.
+                return null;
+            }
+        }
 
         public async Task<int?> ReadToShipCountAsync(bool reload, CancellationToken ct = default)
         {

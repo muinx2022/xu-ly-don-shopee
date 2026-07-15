@@ -66,4 +66,13 @@ public interface IAccountSession
     /// không ném). Trong lúc chạy sẽ chặn nhịp đọc đơn (reload) để không phá thao tác điều hướng giữa chừng.
     /// </summary>
     Task<bool> ProcessOrdersAsync();
+
+    /// <summary>
+    /// <b>Kiểm tra đơn NGAY (thủ công):</b> trong phiên ĐANG chạy, điều hướng cửa sổ về trang chủ Seller
+    /// (có khoảng dừng "kiểu người" trước/sau) rồi đọc số "Chờ Lấy Hàng" tại chỗ, cập nhật
+    /// <see cref="ToShipCount"/> — bản thủ công của nhịp theo dõi 30'. Trả <c>false</c> nếu phiên chưa
+    /// chạy / đang bận điều hướng / không đọc được số (graceful, KHÔNG ném). Dùng cờ điều hướng bao trùm
+    /// để nhịp 30' không reload chồng lên giữa chừng.
+    /// </summary>
+    Task<bool> CheckOrdersAsync();
 }

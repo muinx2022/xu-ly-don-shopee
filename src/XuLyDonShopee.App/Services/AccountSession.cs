@@ -229,6 +229,65 @@ public partial class AccountSession : ObservableObject, IAccountSession
     }
 
     /// <summary>
+    /// Kiểm tra đơn NGAY (thủ công): trong phiên đang chạy, về trang chủ Seller (Goto như người gõ URL —
+    /// KHÔNG click máy) rồi đọc lại số "Chờ Lấy Hàng" ngay, cập nhật <see cref="ToShipCount"/> — không đợi
+    /// chu kỳ theo dõi 30'. Bật cờ <see cref="_navigating"/> để vòng <see cref="RunAsync"/> KHÔNG reload đọc
+    /// đơn giữa chừng và để loại trừ với <see cref="ProcessOrdersAsync"/> (hai thao tác không chạy chồng nhau
+    /// trên cùng trang). Graceful: phiên chưa chạy / đang bận / bị hủy / không đọc được → false, KHÔNG ném.
+    /// KHÔNG đổi <see cref="ToShipCount"/> khi không đọc được (giữ số cũ).
+    /// </summary>
+    public async Task<bool> CheckOrdersAsync()
+    {
+        // Chụp phiên + token dưới lock (nuốt ObjectDisposedException nếu _cts đã dispose).
+        var s = _session;
+        CancellationToken tok;
+        try
+        {
+            lock (_lifecycleLock)
+            {
+                tok = _cts?.Token ?? default;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
+        // _navigating: đang có lượt điều hướng chạy dở (bấm lặp / xử lý đơn) → bỏ qua, không chạy chồng nhau.
+        if (s is null || State != SessionState.Running || _navigating)
+        {
+            return false;
+        }
+
+        _navigating = true;
+        StatusText = "Đang về trang chủ để kiểm tra đơn...";
+        try
+        {
+            // Về trang chủ (Goto) + đọc lại số ngay (reload:false vì trang vừa load) — gộp trong Core.
+            var count = await s.GoHomeAndReadToShipCountAsync(tok).ConfigureAwait(false);
+            if (count is int n)
+            {
+                ToShipCount = n; // VM tự định dạng dòng hiển thị theo số này
+                StatusText = $"Đã kiểm tra: Chờ Lấy Hàng = {n}.";
+                return true;
+            }
+
+            // Không đọc được → GIỮ nguyên số cũ (KHÔNG đổi ToShipCount).
+            StatusText = "Không đọc được số đơn — có thể chưa đăng nhập xong, kiểm tra cửa sổ Brave.";
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            // Bị dừng chủ động trong lúc điều hướng — không phải lỗi.
+            return false;
+        }
+        finally
+        {
+            _navigating = false;
+        }
+    }
+
+    /// <summary>
     /// Luồng chạy nền của phiên. Bê nguyên logic từ <c>OpenSellerAsync</c>; thay modal bằng trạng thái;
     /// tôn trọng <paramref name="ct"/> để dừng nhanh khi người dùng bấm Dừng / thoát app.
     /// </summary>

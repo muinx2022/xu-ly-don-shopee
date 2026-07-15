@@ -1,8 +1,13 @@
 # Plan: Nút "Kiểm tra" — về trang chủ Seller rồi kiểm tra đơn (Chờ Lấy Hàng) ngay
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
+- **Nghiệm thu:** Fable soi diff (nút Kiểm tra cột 3, Dừng→4/Xử lý đơn→5/Mở trang→6; điều hướng bằng
+  GotoAsync có dừng kiểu người trước/sau, không click máy; `_navigating` chặn race; giữ số cũ khi đọc
+  fail) + tự chạy test: **269/269 pass**. Lệch có lợi: Opus gộp thành 1 method Core
+  `GoHomeAndReadToShipCountAsync` thay vì tách `GoToSellerHomeAsync` + `ReadToShipCountAsync` — gọn hơn,
+  hành vi đúng plan.
 
 ## 1. Bối cảnh & mục tiêu
 
@@ -159,4 +164,62 @@ trang chủ Seller** rồi **kiểm tra đơn ngay** (đọc số "Chờ Lấy H
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây.>
+**Ngày thực thi:** 2026-07-15 · **Người thực thi:** Opus (`opus-executor`) · **Kết quả:** hoàn thành, build 0/0, test 269/269 pass.
+
+### Đã hoàn thành (đối chiếu từng bước)
+
+- **Bước 1 — `ILoginSession.GoToSellerHomeAsync`** (`src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`):
+  - Thêm khai báo `Task GoToSellerHomeAsync(CancellationToken ct = default);` vào interface `ILoginSession`
+    (đặt ngay sau `ReadToShipCountAsync`), kèm XML-doc: điều hướng tab về trang chủ Seller để đọc lại
+    to-do box, best-effort, không ném.
+  - Implement trong class lồng `LoginSession` (đặt ngay trước `ReadToShipCountAsync`): lấy `page =
+    _context.Pages[0]` (null → return); `new Random()`; `Task.Delay(rng.Next(600,1800), ct)` trước;
+    `try { GotoAsync(SellerUrl, DOMContentLoaded, Timeout=30000) } catch { nuốt }`; `Task.Delay(rng.Next(800,2000), ct)` sau.
+- **Bước 2 — `IAccountSession.CheckOrdersAsync`** (`src/XuLyDonShopee.App/Services/IAccountSession.cs` +
+  `AccountSession.cs`):
+  - Interface: thêm `Task<bool> CheckOrdersAsync();` với XML-doc như plan.
+  - `AccountSession.CheckOrdersAsync()` theo mẫu `ProcessOrdersAsync`: chụp `_session` + token dưới
+    `_lifecycleLock` (nuốt `ObjectDisposedException`→false); guard `s is null || State != Running ||
+    _navigating` → false; set `_navigating=true` + StatusText "Đang kiểm tra đơn — về trang chủ (kiểu
+    người)..."; `try`: `GoToSellerHomeAsync(tok)` → `ReadToShipCountAsync(reload:false, tok)` → nếu đọc
+    được thì gán `ToShipCount=n` + StatusText "Đã kiểm tra: Chờ Lấy Hàng = {n}." → true; else StatusText
+    "Chưa đọc được số đơn..." → false; `catch (OperationCanceledException)`→false; `finally _navigating=false`.
+- **Bước 3 — ViewModel** (`src/XuLyDonShopee.App/ViewModels/AccountsViewModel.cs`):
+  - Thêm `public bool CanCheckOrders => _editingId is long cid && _services.Sessions.Get(cid) is { State:
+    SessionState.Running };`.
+  - Raise `OnPropertyChanged(nameof(CanCheckOrders))` tại đúng 3 chỗ đang raise `CanProcessOrders`:
+    `OnIsEditingChanged`, `OnIsNewChanged`, `UpdateSelectedSessionStatus()`.
+  - Thêm `[RelayCommand] private async Task CheckOrdersAsync()`: đọc `_editingId` vào biến cục bộ TRƯỚC
+    await, `Get(id)` null→return, `await session.CheckOrdersAsync();`.
+- **Bước 4 — UI** (`src/XuLyDonShopee.App/Views/AccountsView.axaml`, hàng nút ~dòng 163):
+  - `ColumnDefinitions` "Auto,Auto,*,Auto,Auto,Auto" → "Auto,Auto,*,Auto,Auto,Auto,Auto".
+  - Nút mới "Kiểm tra" ở `Grid.Column="3"`, `Classes="secondary"`, `Command=CheckOrdersCommand`,
+    `IsEnabled=CanCheckOrders`, ToolTip theo plan, KHÔNG có Margin trái (sát spacer).
+  - Dời **Dừng → Column 4** (thêm `Margin="10,0,0,0"` để cách nút Kiểm tra — theo plan mục §3 Bước 4),
+    **Xử lý đơn → Column 5**, **Mở trang bán hàng → Column 6** (giữ nguyên Classes/Command/ToolTip/Margin).
+- **Bước 5 — Test stub:** thêm `public Task<bool> CheckOrdersAsync() => Task.FromResult(false);` vào
+  `StubSession` trong `AccountRowViewModelTests.cs` và `AccountSessionManagerTests.cs`.
+
+### Kết quả kiểm chứng (số liệu thật)
+
+- `dotnet build XuLyDonShopee.sln -c Debug`: **Build succeeded, 0 Warning, 0 Error**.
+- `dotnet test`: lần đầu bị WDAC chặn (0x800711C7, chặn theo hash — policy máy, không phải lỗi code).
+  Theo plan: rebuild `--no-incremental -p:Deterministic=false` rồi `dotnet test --no-build`; phải lặp
+  **3 lần** ISG mới cho qua. Lần cuối: **Passed! Failed: 0, Passed: 269, Skipped: 0, Total: 269**. Đã
+  chạy xác nhận thêm 1 lần: vẫn 269/269 pass.
+- `git status --short`: đúng 7 file trong phạm vi plan (`ShopeeLoginService.cs`, `IAccountSession.cs`,
+  `AccountSession.cs`, `AccountsViewModel.cs`, `AccountsView.axaml`, 2 file test stub) — không đụng file ngoài phạm vi.
+- Đã grep xác nhận chỉ có `AccountSession` implement `IAccountSession` và `LoginSession` implement
+  `ILoginSession` (ngoài 2 stub test) → thêm method vào interface không phá implementation nào khác.
+
+### Vướng mắc / bỏ dở
+
+- Không có hạng mục nào bỏ dở. **Smoke live KHÔNG chạy** (cần tài khoản Shopee thật + phiên Brave đang
+  đăng nhập) — đúng như plan ghi, để người dùng smoke sau merge.
+
+### Điểm cần lưu ý so với plan
+
+- Nút "Dừng" trước đây (Column 3, sát spacer) KHÔNG có Margin; sau khi dời sang Column 4 (sau nút Kiểm
+  tra) tôi **thêm** `Margin="10,0,0,0"` — đúng chỉ dẫn tường minh ở §3 Bước 4 ("Dừng ở Column 4 giữ
+  `Margin="10,0,0,0"` để cách nút Kiểm tra"). Đây không phải lệch plan, chỉ ghi rõ vì câu "giữ nguyên
+  Margin" ở cùng đoạn có thể gây hiểu nhầm.

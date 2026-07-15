@@ -160,22 +160,27 @@
                     </Grid>
 
                     <!-- Hàng nút hành động (đưa LÊN TRÊN để luôn thấy, không phải cuộn xuống). -->
-                    <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" Margin="0,0,0,16">
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
                         <Button Grid.Column="0" Classes="accent" Content="Lưu thay đổi"
                                 Command="{Binding SaveCommand}" />
                         <Button Grid.Column="1" Classes="secondary" Content="Hủy" Margin="10,0,0,0"
                                 Command="{Binding CancelCommand}" />
+                        <!-- Kiểm tra: về trang chủ Seller + đọc số Chờ Lấy Hàng NGAY (không đợi 30'). Bật khi phiên đang chạy. -->
+                        <Button Grid.Column="3" Classes="secondary" Content="Kiểm tra"
+                                Command="{Binding CheckOrdersCommand}"
+                                IsEnabled="{Binding CanCheckOrders}"
+                                ToolTip.Tip="Về trang chủ Seller và kiểm tra số đơn Chờ Lấy Hàng ngay (không đợi chu kỳ 30')" />
                         <!-- Dừng phiên của TÀI KHOẢN ĐANG CHỌN (chỉ bật khi tài khoản đó đang chạy). -->
-                        <Button Grid.Column="3" Classes="secondary" Content="Dừng"
+                        <Button Grid.Column="4" Classes="secondary" Content="Dừng" Margin="10,0,0,0"
                                 Command="{Binding StopCommand}"
                                 IsEnabled="{Binding CanStopSeller}"
                                 ToolTip.Tip="Dừng phiên đang mở của tài khoản này (đóng cửa sổ Brave của phiên đó)" />
                         <!-- Xử lý đơn: mở Cài đặt vận chuyển → tab Địa Chỉ (kiểu người). Bật khi Chờ lấy hàng > 0. -->
-                        <Button Grid.Column="4" Classes="accentOutline" Content="Xử lý đơn" Margin="10,0,0,0"
+                        <Button Grid.Column="5" Classes="accentOutline" Content="Xử lý đơn" Margin="10,0,0,0"
                                 Command="{Binding ProcessOrdersCommand}"
                                 IsEnabled="{Binding CanProcessOrders}"
                                 ToolTip.Tip="Mở Cài đặt vận chuyển → tab Địa Chỉ trong phiên đang chạy (bật khi Chờ lấy hàng > 0)" />
-                        <Button Grid.Column="5" Classes="accentOutline" Content="Mở trang bán hàng" Margin="10,0,0,0"
+                        <Button Grid.Column="6" Classes="accentOutline" Content="Mở trang bán hàng" Margin="10,0,0,0"
                                 Command="{Binding OpenSellerCommand}"
                                 IsEnabled="{Binding CanOpenSeller}"
                                 ToolTip.Tip="Mở Shopee Seller để đăng nhập và lưu cookie vào tài khoản này (mở nhiều tài khoản song song)" />

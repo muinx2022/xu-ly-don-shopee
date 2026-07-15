@@ -43,6 +43,8 @@ public class AccountRowViewModelTests
         public Task StopAsync() => Task.CompletedTask;
 
         public Task<bool> ProcessOrdersAsync() => Task.FromResult(false);
+
+        public Task<bool> CheckOrdersAsync() => Task.FromResult(false);
     }
 
     private static AccountRowViewModel NewRow()
