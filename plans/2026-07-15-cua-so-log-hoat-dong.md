@@ -1,9 +1,13 @@
 # Plan: Cửa sổ log hoạt động (panel trong app + ghi file)
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable tự chạy build 0/0 + test **306/306** (+3 ca ActivityLog); đọc toàn bộ diff:
+  ActivityLog an toàn đa luồng (ghi file dưới lock + nuốt lỗi IO; Entries mutate qua uiPost; ring-buffer
+  cap 500), AppServices tạo Log trước Sessions, AccountSession nạp log từ SetStatus/SetError, layout
+  340/*/360 panel log cột 2 song song form, auto-scroll code-behind có gỡ đăng ký khi đổi DataContext
+  (không rò rỉ). Rủi ro thấp (panel quan sát) → xác minh bằng đọc code + build/test, không panel đối kháng.
 
 ## 1. Bối cảnh & yêu cầu
 
@@ -136,4 +140,49 @@ Tạo `src/XuLyDonShopee.App/Services/ActivityLog.cs`, XML-doc tiếng Việt:
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-(để trống)
+**Ngày:** 2026-07-15 · **Người thực thi:** Opus (`opus-executor`)
+
+### Baseline trước khi sửa
+- `dotnet test XuLyDonShopee.sln -c Debug`: **Passed 303 / Failed 0 / Skipped 0** (đúng nền plan nêu). Build 0/0. Không gặp WDAC.
+
+### Đã hoàn thành (từng bước)
+
+**Bước 1 — Service `ActivityLog`** (`src/XuLyDonShopee.App/Services/ActivityLog.cs`, MỚI)
+- `record LogEntry(DateTime Time, string Source, string Message)` + `Display` (uỷ cho `FormatLine`).
+- `static string FormatLine(LogEntry e)` → `HH:mm:ss [Source] Message` (hàm thuần, test được).
+- `class ActivityLog`: ctor `(string logDir, Action<Action>? uiPost = null, int maxEntries = 500)`; `uiPost` null → `Dispatcher.UIThread.Post`. `ObservableCollection<LogEntry> Entries`. `CurrentLogPath` = `logDir/hoatdong-{yyyyMMdd}.log`.
+- `Append(source, message)`: tạo entry (Time=`DateTime.Now`) → ghi file NGAY dưới `lock(_fileLock)` bằng `File.AppendAllText(..., UTF8)`, `try/catch` nuốt lỗi IO → đổ vào `Entries` qua `uiPost` (Add cuối, `RemoveAt(0)` tới khi `<= maxEntries`).
+- `Clear()`: qua `uiPost` → `Entries.Clear()` (KHÔNG xóa file).
+
+**Bước 2 — `AppServices` + nạp log từ `AccountSession`**
+- `AppServices.cs`: thêm `public ActivityLog Log { get; }`; trong ctor tạo `logDir = Path.Combine(GetDirectoryName(Database.Path) ?? ".", "logs")`, `Directory.CreateDirectory(logDir)`, `Log = new ActivityLog(logDir)` — đặt TRƯỚC `Sessions`. Thêm `using System.IO;`.
+- `AccountSession.cs`: thêm field `_logLabel` khởi tạo `$"TK {accountId}"` trong ctor; trong `RunAsync` sau khi đọc `acc`, nếu có `acc.Email` thì gán `_logLabel = acc.Email`. `SetStatus` gọi `_services.Log.Append(_logLabel, text)`; `SetError` gọi `_services.Log.Append(_logLabel, "LỖI: " + message)`.
+
+**Bước 3 — ViewModel + UI**
+- `AccountsViewModel.cs`: thêm `ObservableCollection<LogEntry> LogEntries => _services.Log.Entries;`, `string LogPath => _services.Log.CurrentLogPath;`, `[RelayCommand] private void ClearLog() => _services.Log.Clear();`.
+- `AccountsView.axaml`: đổi `ColumnDefinitions="340,*"` → `"340,*,360"` (form chi tiết GIỮ nguyên ở `Grid.Column="1"`). Thêm `xmlns:services`. Panel log `Border Grid.Column="2"` viền trái, `DockPanel`: header (Dock Top: tiêu đề "Nhật ký hoạt động" + nút "Xóa" `ClearLogCommand`), footer (Dock Bottom: `LogPath` mờ), giữa: `ListBox x:Name="LogList"` bind `LogEntries`, item `{Binding Display}` font mono 11, wrap.
+
+**Bước 4 — Tự cuộn xuống cuối** (`AccountsView.axaml.cs`)
+- `DataContextChanged` → đăng ký `LogEntries.CollectionChanged` (gỡ đăng ký cũ tránh rò rỉ). Khi Action==Add → `Dispatcher.UIThread.Post` → `FindControl<ListBox>("LogList").ScrollIntoView(ItemCount-1)`, `try/catch` nuốt lỗi.
+
+**Bước 5 — Test** (`src/XuLyDonShopee.Tests/ActivityLogTests.cs`, MỚI): 3 ca — `FormatLine` đúng định dạng (+ `Display`==`FormatLine`); cap ring-buffer maxEntries=3, Append 5 → `Entries.Count==3` giữ m2,m3,m4; ghi file → `CurrentLogPath` tồn tại, chứa `[tk1] dong mot`/`[tk2] dong hai`, đúng mẫu `hoatdong-*.log`. Dùng `TempDir` tự dọn.
+
+### Kết quả kiểm chứng (thật)
+- `dotnet build XuLyDonShopee.sln -c Debug`: **Build succeeded, 0 Warning, 0 Error** (bao gồm biên dịch XAML).
+- `dotnet test XuLyDonShopee.sln -c Debug --no-build`: **Passed 306 / Failed 0 / Skipped 0** (303 nền + 3 ca ActivityLog mới). Không gặp WDAC 0x800711C7 lần chạy này (không cần `-p:Deterministic=false`).
+
+### Đối chiếu tiêu chí nghiệm thu (mục 4)
+- [x] Panel "Nhật ký hoạt động" ở cột phải ngoài cùng; nạp qua `SetStatus`/`SetError` của MỌI phiên, nhãn `[tài khoản]`, tự cuộn cuối (code-behind).
+- [x] Ghi file `logs/hoatdong-YYYYMMDD.log` cạnh database; nút "Xóa" chỉ `Entries.Clear()`, KHÔNG xóa file.
+- [x] Đa luồng: file dưới `lock`, `Entries` qua `uiPost` (UI thread); lỗi ghi file bị nuốt.
+- [x] Ring-buffer cap 500 (test chứng minh cap giữ dòng mới nhất).
+- [x] Build 0/0; test 306 pass.
+- [x] Chỉ tạo/sửa đúng 7 file trong danh sách.
+
+### Vướng mắc / bỏ dở
+- Không có. Đã làm đủ bước 1–5.
+- KHÔNG chạy app live (môi trường WDAC) — chỉ build + test + đối chiếu code như plan yêu cầu.
+- KHÔNG commit (để Fable commit sau nghiệm thu).
+
+### Ghi chú kỹ thuật
+- Chỉ funnel log qua `SetStatus`/`SetError` theo đúng phạm vi plan. Một số thông báo đặt trực tiếp `StatusText = "..."` (trong `ProcessOrdersAsync`/`CheckOrdersAsync`/`StopAsync` và câu tổng kết cuối `RunAsync`) KHÔNG đi qua log — đúng chủ ý plan (plan sau sẽ gọi `Log.Append` trực tiếp cho từng bước xử lý đơn). Nếu muốn các dòng này cũng vào log thì cân nhắc mở rộng ở plan sau.

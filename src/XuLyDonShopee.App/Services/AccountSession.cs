@@ -53,6 +53,11 @@ public partial class AccountSession : ObservableObject, IAccountSession
     // Chờ trước lần kiểm lại (xác nhận proxy chết lần 2) để chống false-negative khi mạng chập chờn.
     private const int ProxyRecheckDelayMs = 5000;
 
+    // Nhãn tài khoản gắn vào mỗi dòng log (phân biệt nguồn khi nhiều phiên chạy song song). Mặc định
+    // "TK {id}" để log phát TRƯỚC khi đọc được email (chọn proxy, chuẩn bị trình duyệt) vẫn có nhãn;
+    // RunAsync cập nhật thành email khi đã đọc tài khoản.
+    private string _logLabel;
+
     public AccountSession(
         long accountId,
         AppServices services,
@@ -65,6 +70,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
         _loginService = loginService;
         _healthChecker = healthChecker;
         _nextManualProxy = nextManualProxy;
+        _logLabel = $"TK {accountId}";
     }
 
     public long AccountId => _accountId;
@@ -361,6 +367,12 @@ public partial class AccountSession : ObservableObject, IAccountSession
             // Đọc tài khoản theo Id (KHÔNG đọc form) — dùng cho cả chọn proxy lẫn tự đăng nhập.
             var acc = _services.Accounts.GetById(_accountId);
 
+            // Gắn nhãn email cho log (thay mặc định "TK {id}") để dòng log dễ nhận nguồn.
+            if (!string.IsNullOrWhiteSpace(acc?.Email))
+            {
+                _logLabel = acc!.Email;
+            }
+
             // Hồ sơ persistent riêng cho tài khoản này → mở lại vẫn còn đăng nhập.
             var baseDir = Path.GetDirectoryName(_services.Database.Path) ?? ".";
             var userDataDir = BrowserProfilePaths.ForAccount(baseDir, _accountId);
@@ -630,6 +642,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
     {
         StatusText = text;
         State = state;
+        _services.Log.Append(_logLabel, text);
     }
 
     private void SetError(string message)
@@ -637,6 +650,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
         LastError = message;
         StatusText = message;
         State = SessionState.Error;
+        _services.Log.Append(_logLabel, "LỖI: " + message);
     }
 
     /// <summary>

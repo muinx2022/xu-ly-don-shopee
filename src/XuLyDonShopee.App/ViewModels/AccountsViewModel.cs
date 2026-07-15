@@ -42,6 +42,16 @@ public partial class AccountsViewModel : ViewModelBase
     /// bọc <see cref="Account"/> + tick chọn + trạng thái phiên (chấm chạy / "Chờ lấy: N").</summary>
     public ObservableCollection<AccountRowViewModel> Accounts { get; } = new();
 
+    /// <summary>Các dòng nhật ký hoạt động (global mọi phiên) cho panel "Nhật ký hoạt động" ở cột phải.</summary>
+    public ObservableCollection<LogEntry> LogEntries => _services.Log.Entries;
+
+    /// <summary>Đường dẫn file log hôm nay (hiển thị mờ dưới panel để biết file log ở đâu).</summary>
+    public string LogPath => _services.Log.CurrentLogPath;
+
+    /// <summary>Xóa nội dung panel nhật ký (KHÔNG xóa file log trên đĩa).</summary>
+    [RelayCommand]
+    private void ClearLog() => _services.Log.Clear();
+
     /// <summary>Các lựa chọn trạng thái cho ComboBox.</summary>
     public static AccountStatus[] StatusOptions { get; } =
     {
