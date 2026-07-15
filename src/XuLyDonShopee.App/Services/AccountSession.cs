@@ -38,6 +38,10 @@ public partial class AccountSession : ObservableObject, IAccountSession
     private Task? _runTask;
     private volatile ILoginSession? _session;
 
+    // Bật trong lúc đang XỬ LÝ ĐƠN (điều hướng kiểu người). Khi bật, vòng RunAsync KHÔNG chạy nhịp đọc đơn
+    // (ReadToShipCountAsync có reload trang → sẽ phá thao tác điều hướng đang chạy giữa chừng).
+    private volatile bool _navigating;
+
     public AccountSession(
         long accountId,
         AppServices services,
@@ -155,6 +159,55 @@ public partial class AccountSession : ObservableObject, IAccountSession
         catch { /* bỏ qua */ }
 
         State = SessionState.Stopped;
+    }
+
+    /// <summary>
+    /// Bước đầu xử lý đơn: trong phiên đang chạy, điều hướng KIỂU NGƯỜI tới "Cài Đặt Vận Chuyển" → tab
+    /// "Địa Chỉ". Bật cờ <see cref="_navigating"/> để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn giữa
+    /// chừng (phá thao tác). Graceful: phiên chưa chạy / bị hủy / lỗi → false, KHÔNG ném.
+    /// </summary>
+    public async Task<bool> ProcessOrdersAsync()
+    {
+        // Chụp phiên + token dưới lock (nuốt ObjectDisposedException nếu _cts đã dispose).
+        var s = _session;
+        CancellationToken tok;
+        try
+        {
+            lock (_lifecycleLock)
+            {
+                tok = _cts?.Token ?? default;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
+        // _navigating: đang có lượt điều hướng chạy dở (bấm lặp) → bỏ qua, không chạy 2 luồng chuột chồng nhau.
+        if (s is null || State != SessionState.Running || _navigating)
+        {
+            return false;
+        }
+
+        _navigating = true;
+        StatusText = "Đang mở Cài đặt vận chuyển → Địa Chỉ (kiểu người)...";
+        try
+        {
+            var ok = await s.OpenShippingAddressSettingsAsync(tok).ConfigureAwait(false);
+            StatusText = ok
+                ? "Đã mở tab Địa Chỉ (Cài đặt vận chuyển)."
+                : "Không mở được Cài đặt vận chuyển — thao tác tay trong cửa sổ Brave.";
+            return ok;
+        }
+        catch (OperationCanceledException)
+        {
+            // Bị dừng chủ động trong lúc điều hướng — không phải lỗi.
+            return false;
+        }
+        finally
+        {
+            _navigating = false;
+        }
     }
 
     /// <summary>
@@ -284,7 +337,8 @@ public partial class AccountSession : ObservableObject, IAccountSession
                     }
 
                     // Nhịp theo dõi đơn "Chờ Lấy Hàng": tới hạn thì reload + đọc số. Lần đầu KHÔNG reload.
-                    if (DateTime.UtcNow >= nextOrderCheck)
+                    // Đang điều hướng xử lý đơn (_navigating) → BỎ QUA nhịp này (reload sẽ phá thao tác giữa chừng).
+                    if (!_navigating && DateTime.UtcNow >= nextOrderCheck)
                     {
                         var count = await session.ReadToShipCountAsync(reload: !firstOrderCheck, ct).ConfigureAwait(false);
                         if (count is int n)

@@ -59,4 +59,11 @@ public interface IAccountSession
 
     /// <summary>Dừng phiên: hủy vòng lặp, đóng &amp; kill cây tiến trình Brave, đưa về <see cref="SessionState.Stopped"/>.</summary>
     Task StopAsync();
+
+    /// <summary>
+    /// <b>Bước đầu xử lý đơn:</b> trong phiên ĐANG chạy, điều hướng <b>kiểu người</b> tới "Cài Đặt Vận
+    /// Chuyển" rồi bấm tab "Địa Chỉ". Trả <c>false</c> nếu phiên chưa chạy / lỗi / không mở được (graceful,
+    /// không ném). Trong lúc chạy sẽ chặn nhịp đọc đơn (reload) để không phá thao tác điều hướng giữa chừng.
+    /// </summary>
+    Task<bool> ProcessOrdersAsync();
 }

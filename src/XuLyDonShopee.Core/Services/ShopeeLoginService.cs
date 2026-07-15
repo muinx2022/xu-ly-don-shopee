@@ -58,6 +58,20 @@ public interface ILoginSession : IAsyncDisposable
     /// </para>
     /// </summary>
     Task<int?> ReadToShipCountAsync(bool reload, CancellationToken ct = default);
+
+    /// <summary>
+    /// <b>Bước đầu xử lý đơn:</b> ở menu trái (nhóm "Quản Lý Đơn Hàng") tìm &amp; bấm link
+    /// <b>"Cài Đặt Vận Chuyển"</b>, chờ trang cài đặt vận chuyển mở rồi bấm tab <b>"Địa Chỉ"</b> —
+    /// <b>toàn bộ bằng thao tác kiểu người</b> (di chuột theo đường cong <see cref="HumanMouse"/>, click
+    /// down→trễ→up, có khoảng dừng/chờ ngẫu nhiên kiểu "người đọc trang" giữa các bước). Nếu submenu đang
+    /// đóng thì click mục cha "Quản Lý Đơn Hàng" kiểu người để mở ra rồi tìm lại.
+    /// <para>
+    /// <b>Graceful — không bao giờ ném:</b> chưa đăng nhập, Shopee đổi selector, trang không mở được, hoặc
+    /// context đã đóng → trả <c>false</c> (KHÔNG phá phiên). Trả <c>true</c> khi tab "Địa Chỉ" đã ở trạng
+    /// thái active (đã bấm hoặc vốn đang active).
+    /// </para>
+    /// </summary>
+    Task<bool> OpenShippingAddressSettingsAsync(CancellationToken ct = default);
 }
 
 /// <summary>
@@ -778,6 +792,287 @@ public class ShopeeLoginService
             var normalized = string.Join(' ',
                 descText.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             return string.Equals(normalized, ToShipDescText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // ===== Điều hướng "Cài Đặt Vận Chuyển" → tab "Địa Chỉ" (KIỂU NGƯỜI) =====
+        // URL trực tiếp trang Cài đặt vận chuyển — CHỈ dùng ở fallback cuối (khi Shopee đổi DOM menu khiến
+        // không tìm được link để click kiểu người).
+        private const string ShippingSettingsUrl = "https://banhang.shopee.vn/portal/all-settings/shipping";
+
+        public async Task<bool> OpenShippingAddressSettingsAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return false;
+                }
+
+                // Random nội bộ (app dùng ngẫu nhiên thật, đồng bộ style với TryHumanLoginAsync).
+                var rng = new Random();
+
+                // Con trỏ bắt đầu ở vị trí NGẪU NHIÊN trong viewport (đọc kích thước thật; null → 1280x720).
+                var vp = page.ViewportSize;
+                double vw = vp is not null ? vp.Width : 1280;
+                double vh = vp is not null ? vp.Height : 720;
+                double mx = rng.NextDouble() * vw;
+                double my = rng.NextDouble() * vh;
+
+                // Dừng kiểu "người đọc trang" trước khi bắt đầu.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 1) Tìm link "Cài Đặt Vận Chuyển" (poll, deadline ~10s).
+                var link = await FindShippingLinkAsync(page, 10000, rng, ct).ConfigureAwait(false);
+
+                // 2) Chưa thấy (submenu có thể đang đóng) → click mục cha "Quản Lý Đơn Hàng" kiểu người rồi tìm lại.
+                if (link is null)
+                {
+                    var parent = await FindOrderMenuParentAsync(page, ct).ConfigureAwait(false);
+                    if (parent is not null)
+                    {
+                        (mx, my) = await HumanMoveAndClickAsync(page, parent, mx, my, rng, ct).ConfigureAwait(false);
+                        await Task.Delay(rng.Next(500, 1500), ct).ConfigureAwait(false);
+                        link = await FindShippingLinkAsync(page, 10000, rng, ct).ConfigureAwait(false);
+                    }
+                }
+
+                // 3) Click link kiểu người rồi chờ trang cài đặt vận chuyển mở.
+                bool opened;
+                if (link is not null)
+                {
+                    (mx, my) = await HumanMoveAndClickAsync(page, link, mx, my, rng, ct).ConfigureAwait(false);
+                    opened = await WaitShippingPageAsync(page, 20000, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    // FALLBACK CUỐI (hiếm — Shopee đổi DOM menu): điều hướng thẳng. Kém human hơn, đường thoát.
+                    try
+                    {
+                        await page.GotoAsync(ShippingSettingsUrl, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = 30000
+                        }).ConfigureAwait(false);
+                    }
+                    catch { /* nuốt lỗi điều hướng — vẫn thử chờ trang bên dưới */ }
+
+                    opened = await WaitShippingPageAsync(page, 20000, ct).ConfigureAwait(false);
+                }
+
+                if (!opened)
+                {
+                    return false;
+                }
+
+                // 4) Dừng "đọc trang" rồi tìm & bấm tab "Địa Chỉ".
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                var tab = await FindAddressTabAsync(page, 10000, rng, ct).ConfigureAwait(false);
+                if (tab is null)
+                {
+                    return false;
+                }
+
+                // Tab đã active → coi như xong (không click lại). Chưa active → click kiểu người.
+                if (IsTabActive(await tab.GetAttributeAsync("class").ConfigureAwait(false)))
+                {
+                    return true;
+                }
+
+                await HumanMoveAndClickAsync(page, tab, mx, my, rng, ct).ConfigureAwait(false);
+                return true;
+            }
+            catch
+            {
+                // Bất kỳ lỗi nào (selector đổi, context ngắt, hủy...) → false, KHÔNG phá phiên.
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Dò link "Cài Đặt Vận Chuyển" trong menu trái, poll tới khi hết <paramref name="timeoutMs"/>.
+        /// Thử theo thứ tự: (a) <c>a.sidebar-submenu-item-link[href*='/portal/all-settings/shipping']</c>;
+        /// (b) <c>a[test-id='order shipping setting']</c>; (c) duyệt mọi <c>a.sidebar-submenu-item-link</c>
+        /// khớp <see cref="ShopeeShippingNav.IsShippingSettingText"/>. Chỉ nhận element đang HIỂN THỊ
+        /// (<c>BoundingBoxAsync() != null</c>). Không thấy → <c>null</c> (không ném).
+        /// </summary>
+        private static async Task<IElementHandle?> FindShippingLinkAsync(
+            IPage page, int timeoutMs, Random rng, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var el = await FirstVisibleByBoxAsync(
+                             page, "a.sidebar-submenu-item-link[href*='/portal/all-settings/shipping']", ct)
+                         .ConfigureAwait(false)
+                         ?? await FirstVisibleByBoxAsync(page, "a[test-id='order shipping setting']", ct)
+                             .ConfigureAwait(false);
+                if (el is not null)
+                {
+                    return el;
+                }
+
+                // Fallback theo text: duyệt mọi link submenu, khớp "Cài Đặt Vận Chuyển".
+                try
+                {
+                    var links = await page.QuerySelectorAllAsync("a.sidebar-submenu-item-link").ConfigureAwait(false);
+                    foreach (var a in links)
+                    {
+                        var text = await a.InnerTextAsync().ConfigureAwait(false);
+                        if (ShopeeShippingNav.IsShippingSettingText(text)
+                            && await a.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                        {
+                            return a;
+                        }
+                    }
+                }
+                catch { /* selector chưa render / không hợp lệ — thử vòng sau */ }
+
+                await Task.Delay(rng.Next(300, 501), ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>
+        /// Dò mục cha "Quản Lý Đơn Hàng" ở menu trái (để click mở submenu). Thử: (a)
+        /// <c>li.ps_menu_order div.sidebar-menu-item</c>; (b) fallback duyệt mọi <c>.sidebar-menu-item</c>
+        /// khớp <see cref="ShopeeShippingNav.IsOrderMenuText"/>. Chỉ nhận element đang hiển thị. Một lượt
+        /// (không poll) — không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindOrderMenuParentAsync(IPage page, CancellationToken ct)
+        {
+            var el = await FirstVisibleByBoxAsync(page, "li.ps_menu_order div.sidebar-menu-item", ct)
+                .ConfigureAwait(false);
+            if (el is not null)
+            {
+                return el;
+            }
+
+            try
+            {
+                var items = await page.QuerySelectorAllAsync(".sidebar-menu-item").ConfigureAwait(false);
+                foreach (var item in items)
+                {
+                    var text = await item.InnerTextAsync().ConfigureAwait(false);
+                    if (ShopeeShippingNav.IsOrderMenuText(text)
+                        && await item.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                    {
+                        return item;
+                    }
+                }
+            }
+            catch { /* bỏ qua */ }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Chờ trang Cài đặt vận chuyển mở: poll tới khi hết <paramref name="timeoutMs"/>, điều kiện là
+        /// <c>page.Url</c> chứa <c>/portal/all-settings/shipping</c> HOẶC đã render <c>.eds-tabs__nav-tab</c>
+        /// (SPA có thể đổi route mà không load document mới → KHÔNG dùng WaitForNavigation). Hết giờ → false.
+        /// </summary>
+        private static async Task<bool> WaitShippingPageAsync(IPage page, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    if (ShopeeShippingNav.IsShippingSettingHref(page.Url))
+                    {
+                        return true;
+                    }
+
+                    if (await page.QuerySelectorAsync(".eds-tabs__nav-tab").ConfigureAwait(false) is not null)
+                    {
+                        return true;
+                    }
+                }
+                catch { /* điều hướng dở — thử vòng sau */ }
+
+                await Task.Delay(250, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return false;
+        }
+
+        /// <summary>
+        /// Dò tab "Địa Chỉ" trong thanh <c>.eds-tabs__nav-tab</c>, poll tới khi hết
+        /// <paramref name="timeoutMs"/>, khớp <see cref="ShopeeShippingNav.IsAddressTabText"/> (InnerText
+        /// có thể kèm rác badge). Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindAddressTabAsync(
+            IPage page, int timeoutMs, Random rng, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var tabs = await page.QuerySelectorAllAsync(".eds-tabs__nav-tab").ConfigureAwait(false);
+                    foreach (var t in tabs)
+                    {
+                        var text = await t.InnerTextAsync().ConfigureAwait(false);
+                        if (ShopeeShippingNav.IsAddressTabText(text))
+                        {
+                            return t;
+                        }
+                    }
+                }
+                catch { /* chưa render — thử vòng sau */ }
+
+                await Task.Delay(rng.Next(300, 501), ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>True nếu chuỗi class của tab chứa token "active" (tab đang được chọn).</summary>
+        private static bool IsTabActive(string? classAttr)
+        {
+            if (string.IsNullOrWhiteSpace(classAttr))
+            {
+                return false;
+            }
+
+            foreach (var c in classAttr.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.Equals(c, "active", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Dò phần tử đầu tiên khớp <paramref name="selector"/> đang HIỂN THỊ
+        /// (<c>BoundingBoxAsync() != null</c>). Một lượt, nuốt lỗi selector → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FirstVisibleByBoxAsync(IPage page, string selector, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var el = await page.QuerySelectorAsync(selector).ConfigureAwait(false);
+                if (el is not null && await el.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                {
+                    return el;
+                }
+            }
+            catch { /* selector không hợp lệ / chưa render */ }
+
+            return null;
         }
 
         public async ValueTask DisposeAsync()

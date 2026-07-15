@@ -1,8 +1,12 @@
 # Plan: Nút "Xử lý đơn" — mở Cài đặt vận chuyển → tab Địa Chỉ (kiểu người)
 
 - **Ngày:** 2026-07-15
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần phiên Shopee đăng nhập thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
+- **Nghiệm thu:** Fable đọc code (điều hướng toàn bộ qua `HumanMoveAndClickAsync` + dừng 0.8–2.5s kiểu
+  người; grep xác nhận không có ClickAsync/FillAsync thẳng; `GotoAsync` chỉ ở fallback; cờ `_navigating`
+  chặn race reload) + tự chạy test: **201/201 pass**. Fable vá thêm 1 dòng: chặn bấm "Xử lý đơn" lặp khi
+  đang điều hướng (`|| _navigating` trong guard `ProcessOrdersAsync`) — build 0/0, test lại 201/201.
 - **Ghi chú:** Bước ĐẦU của luồng "xử lý đơn" (các bước nghiệp vụ sau tab Địa Chỉ sẽ có plan riêng).
 
 ## 1. Bối cảnh & mục tiêu
@@ -224,4 +228,64 @@ Tạo `src/XuLyDonShopee.Core/Services/ShopeeShippingNav.cs` — static class, X
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây.>
+**Ngày thực thi:** 2026-07-15 · **Người thực thi:** Opus (`opus-executor`)
+
+### Đã hoàn thành (đối chiếu từng bước plan)
+
+- **Bước 1 — Helper thuần** · tạo `src/XuLyDonShopee.Core/Services/ShopeeShippingNav.cs`
+  (static class, XML-doc tiếng Việt): `NormalizeUiText`, `IsShippingSettingHref`,
+  `IsShippingSettingText`, `IsOrderMenuText`, `IsAddressTabText` — đúng đặc tả (IsAddressTabText dùng
+  "chứa", các cái khác dùng "bằng" sau chuẩn hóa).
+- **Bước 2 — Điều hướng kiểu người** · `src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`:
+  - Interface `ILoginSession`: thêm `Task<bool> OpenShippingAddressSettingsAsync(CancellationToken ct = default)` + XML-doc.
+  - `LoginSession` implement theo đúng khung 6 bước: dừng ngẫu nhiên 800–2500ms trước khi bắt đầu →
+    tìm link "Cài Đặt Vận Chuyển" (3 selector fallback, chỉ nhận element `BoundingBoxAsync()!=null`,
+    poll 300–500ms deadline 10s) → nếu chưa thấy thì click mục cha "Quản Lý Đơn Hàng" kiểu người, chờ
+    500–1500ms rồi tìm lại → click link kiểu người → chờ trang mở (poll 250ms deadline 20s, điều kiện
+    Url chứa `/portal/all-settings/shipping` HOẶC có `.eds-tabs__nav-tab`, KHÔNG WaitForNavigation) →
+    dừng 800–2500ms → tìm tab "Địa Chỉ" → nếu đã `active` coi như xong, chưa thì click kiểu người.
+    Fallback cuối `GotoAsync` chỉ khi link vẫn null sau khi đã thử mở mục cha. Bọc try/catch toàn bộ → false.
+  - Thêm 6 helper private: `FindShippingLinkAsync`, `FindOrderMenuParentAsync`, `WaitShippingPageAsync`,
+    `FindAddressTabAsync`, `IsTabActive`, `FirstVisibleByBoxAsync`. **Mọi click đều qua
+    `HumanMoveAndClickAsync`** — không có `.ClickAsync(`/`.FillAsync(`/`Mouse.ClickAsync(` nào (đã grep xác nhận).
+- **Bước 3 — Session + chống race** · `IAccountSession.cs` thêm `Task<bool> ProcessOrdersAsync()`;
+  `AccountSession.cs`: thêm `private volatile bool _navigating`; điều kiện nhịp đọc đơn đổi thành
+  `if (!_navigating && DateTime.UtcNow >= nextOrderCheck)`; method `ProcessOrdersAsync` chụp
+  `_session`+token dưới lock (nuốt `ObjectDisposedException`→false), gate `s is null || State != Running`,
+  bật `_navigating`, đặt StatusText, gọi `OpenShippingAddressSettingsAsync`, đặt StatusText theo kết quả,
+  `finally { _navigating = false; }`, bắt `OperationCanceledException`→false.
+- **Bước 4 — VM + UI** · `AccountsViewModel.cs`: thêm `CanProcessOrders` (=`_editingId is long pid &&
+  Sessions.Get(pid) is { State: Running, ToShipCount: > 0 }`); raise `CanProcessOrders` tại đúng 3 chỗ
+  (`OnIsEditingChanged`, `OnIsNewChanged`, `UpdateSelectedSessionStatus`); `[RelayCommand] ProcessOrdersAsync`
+  đọc `_editingId` vào biến cục bộ trước await, `Get(id)` null→return, `await session.ProcessOrdersAsync()`.
+  `AccountsView.axaml`: `ColumnDefinitions` → `"Auto,Auto,*,Auto,Auto,Auto"`; nút "Xử lý đơn" ở Column 4
+  (giữa Dừng và Mở trang bán hàng), `accentOutline`, `ProcessOrdersCommand`, `CanProcessOrders`, ToolTip;
+  "Mở trang bán hàng" dời sang Column 5.
+- **Bước 5 — Test + stub** · tạo `src/XuLyDonShopee.Tests/ShopeeShippingNavTests.cs` (35 case: normalize
+  null/rỗng/space/xuống dòng/tab/hoa-thường; href đúng/sai; text menu/tab khớp cả bản có rác; tab "Địa Chỉ"
+  kèm badge → true, hai tab kia + null → false). Cập nhật 2 stub `IAccountSession` (`AccountSessionManagerTests.cs`,
+  `AccountRowViewModelTests.cs`) thêm `ProcessOrdersAsync() => Task.FromResult(false)`. Đã grep xác nhận
+  chỉ có 2 stub.
+
+### Kết quả kiểm chứng (số liệu thật)
+
+- `dotnet build XuLyDonShopee.sln -c Debug` → **Build succeeded, 0 Warning, 0 Error**.
+- `dotnet test --no-build` lần đầu **bị WDAC/ISG chặn** DLL test (`0x800711C7`) — đúng chính sách máy.
+  Theo mục Rủi ro: build lại `-p:Deterministic=false` (vẫn 0 warning/0 error) rồi `dotnet test --no-build`
+  → **Passed! Failed: 0, Passed: 201, Skipped: 0, Total: 201** (nền 166 + 35 case mới).
+- `git status --short`: đúng 9 file trong phạm vi plan (7 sửa + 2 mới), không có file lạc.
+
+### Vướng mắc / bỏ dở
+
+- **Không smoke live được** (đúng như plan lường trước): môi trường Opus không có tài khoản Shopee đăng
+  nhập thật + WDAC chặn chạy binary. Selector/luồng đã được đối chiếu với DOM người dùng cung cấp và phủ
+  bằng unit test helper + build + full test. Cần Fable nhờ người dùng smoke thật sau merge.
+- Enable-state nút (`CanProcessOrders`) không unit-test được vì `AppServices.Sessions` là manager thật
+  không inject stub — chấp nhận theo plan (nghiệm thu bằng đọc code; giống `CanStopSeller`).
+
+### Đề xuất
+
+- Không có điểm plan cần điều chỉnh. Một lưu ý nhỏ cho các bước nghiệp vụ SAU (plan sau): so khớp text
+  tiếng Việt hiện dùng `StringComparison.Ordinal`/`OrdinalIgnoreCase` (đồng bộ với `IsToShipDesc` sẵn có);
+  nếu về sau gặp trang Shopee trả text ở dạng Unicode chuẩn hóa khác (composed/decomposed) thì có thể cần
+  `.Normalize()` — hiện chưa cần và không nằm trong phạm vi plan này.
