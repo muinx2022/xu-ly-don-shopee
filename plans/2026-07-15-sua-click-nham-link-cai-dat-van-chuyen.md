@@ -40,16 +40,23 @@ Luồng hiện tại (`src/XuLyDonShopee.Core/Services/ShopeeLoginService.cs`, c
 - Mỗi item submenu bọc `eds-popover` với popper `display:none` bật khi hover — popper của item KHÁC có
   thể đè lên link đích lúc chuột lướt qua; popper của CHÍNH item đích nằm BÊN TRONG thẻ `<a>` (nên
   hit-test bằng `node.contains(hit)` vẫn nhận đúng).
+- Bản chụp DOM lần 2 của người dùng: link có thêm class `router-link-active`
+  (`class="router-link-active sidebar-submenu-item-link"`) — khi trình duyệt đang ĐỨNG trên route đó.
+  Selector khớp theo href/test-id nên không ảnh hưởng; đừng so khớp theo chuỗi class nguyên văn.
 
 ## 2. Phạm vi
 
 - **Làm:**
+  - **Kiểm trạng thái bung/cụp của nhóm cha "Quản Lý Đơn Hàng" TRƯỚC khi di chuột** (yêu cầu bổ sung
+    của người dùng 15/7): DOM Shopee không có class trạng thái trên `li.sidebar-menu-box` → kiểm bằng
+    hình học (chiều cao submenu, `elementFromPoint` tại tâm link — chạy bằng JS, KHÔNG cần di chuột).
+    Đang cụp → click kiểu người vào mục cha để bung, rồi mới click link. CHỈ click mục cha khi thật sự
+    cụp — tránh toggle làm cụp nhóm đang mở.
   - Primitive click mới có **hit-test `document.elementFromPoint`** ngay trước khi nhả click
     (`HumanMoveAndClickVerifiedAsync`) — vẫn 100% kiểu người (chuột cong, down→trễ→up, chờ ngẫu nhiên).
   - Dùng primitive mới cho MỌI click nghiệp vụ trong `OpenShippingAddressSettingsAsync` và
     `SetPickupAddressAsync` (qua việc đổi ruột `TryHumanClickVisibleAsync`).
-  - Khi hit-test fail trên link Cài Đặt Vận Chuyển → click (verified) mục cha "Quản Lý Đơn Hàng" để
-    bung submenu rồi thử lại; đường thoát cuối vẫn là `GotoAsync` (đã có).
+  - Đường thoát cuối vẫn là `GotoAsync` (đã có).
   - Siết `WaitShippingPageAsync` chỉ nhận theo URL; caller fallback `GotoAsync` một lần khi hết giờ.
   - Trả kết quả PHÂN BIỆT BƯỚC LỖI (enum mới `ShippingNavResult`) để `AccountSession` báo StatusText
     đúng bước hỏng.
@@ -124,6 +131,57 @@ public enum ShippingNavResult
    Lưu, kể cả `HumanCancelModalAsync` nếu nó cũng dùng — kiểm tra và đổi tương tự nếu đang gọi thẳng
    `HumanMoveAndClickAsync`) tự hưởng hit-test, không đổi chữ ký.
 
+### Bước 2b — Đọc trạng thái bung/cụp của link trong submenu (KHÔNG di chuột)
+
+DOM Shopee KHÔNG có class trạng thái (kiểu `collapsed`/`open`) trên `li.sidebar-menu-box` → đọc bằng
+hình học qua JS. Hai phần:
+
+1. **Enum + parser thuần (test được)** — thêm vào `src/XuLyDonShopee.Core/Services/ShopeeShippingNav.cs`:
+   ```csharp
+   /// <summary>Trạng thái sẵn sàng nhận click của link trong submenu (đọc từ DOM bằng JS hình học).</summary>
+   public enum LinkReadiness
+   {
+       /// <summary>Không đọc được / giá trị lạ — coi như không rõ, xử lý thận trọng.</summary>
+       Unknown,
+       /// <summary>Link nhận click tại tâm của nó — click được ngay.</summary>
+       Ready,
+       /// <summary>Submenu đang CỤP (chiều cao ~0 / tâm link thuộc về phần tử ngoài submenu) — cần bung mục cha.</summary>
+       Collapsed,
+       /// <summary>Link đang bị phần tử khác TRONG cùng submenu đè (popover hover...) — chờ rồi thử lại, KHÔNG click mục cha.</summary>
+       Covered,
+   }
+
+   /// <summary>Parse chuỗi trạng thái từ JS ("ready"/"collapsed"/"covered", không phân biệt hoa thường,
+   /// kèm khoảng trắng thừa) về <see cref="LinkReadiness"/>; null/rỗng/lạ → Unknown.</summary>
+   public static LinkReadiness ParseLinkReadiness(string? s) => NormalizeUiText(s) switch
+   {
+       "ready" => LinkReadiness.Ready,
+       "collapsed" => LinkReadiness.Collapsed,
+       "covered" => LinkReadiness.Covered,
+       _ => LinkReadiness.Unknown,
+   };
+   ```
+2. **Helper JS trong `LoginSession`** — `GetLinkReadinessAsync(IElementHandle link)`: chạy
+   `link.EvaluateAsync<string>` với script (nuốt lỗi → "unknown"):
+   ```js
+   (node) => {
+     const ul = node.closest('ul.sidebar-submenu');
+     const ulRect = ul ? ul.getBoundingClientRect() : null;
+     if (ulRect && ulRect.height < 2) return 'collapsed';          // accordion cụp (max-height ~0)
+     const r = node.getBoundingClientRect();
+     if (r.width === 0 || r.height === 0) return 'collapsed';       // display:none / chưa render
+     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+     const hit = document.elementFromPoint(cx, cy);
+     if (!hit) return 'covered';                                    // ngoài viewport → caller scroll rồi đọc lại
+     if (node === hit || node.contains(hit) || hit.contains(node)) return 'ready';
+     // Tâm link đang thuộc về phần tử khác: cùng submenu → bị popover đè (covered);
+     // ngoài submenu → link bị clip vì nhóm cụp (collapsed).
+     return ul && ul.contains(hit) ? 'covered' : 'collapsed';
+   }
+   ```
+   Kết quả cho qua `ShopeeShippingNav.ParseLinkReadiness`. Điểm mấu chốt: chạy ĐƯỢC trước khi di chuột
+   (elementFromPoint là hình học thuần, không cần hover).
+
 ### Bước 3 — Luồng `OpenShippingAddressSettingsAsync` (đổi chữ ký + chống click nhầm)
 
 - Interface `ILoginSession`: `Task<bool> OpenShippingAddressSettingsAsync(...)` →
@@ -132,13 +190,24 @@ public enum ShippingNavResult
   implement; call site duy nhất là `AccountSession.ProcessOrdersAsync` — sửa ở Bước 5.)
 - Trong `LoginSession.OpenShippingAddressSettingsAsync`:
   1. `page` null → `Failed`. Giữ nguyên khởi tạo rng/mx/my + dừng đọc trang 800–2500ms.
-  2. Tìm link (`FindShippingLinkAsync` giữ nguyên). Có link → `HumanMoveAndClickVerifiedAsync`.
-  3. **`Clicked == false`** (điểm đang bị cụp/che — chính là lỗi thực tế):
-     - Tìm mục cha `FindOrderMenuParentAsync` → click **verified**; chờ 500–1500ms; `FindShippingLinkAsync`
-       lại (deadline 10s) → click verified lần nữa.
-     - Vẫn không click được (hoặc không thấy link) → **fallback `GotoAsync`** (nguyên khối cũ).
-  4. Link không thấy ngay từ đầu → giữ nhánh cũ (mở mục cha → tìm lại → không được thì `GotoAsync`),
-     nhưng mọi click đổi sang verified.
+  2. Tìm link (`FindShippingLinkAsync` giữ nguyên). **TRƯỚC khi di chuột**, đọc trạng thái
+     `GetLinkReadinessAsync(link)` (Bước 2b), xử lý theo trạng thái — poll nhẹ để trạng thái nhất thời
+     tự tan (mỗi vòng chờ 300–800ms ngẫu nhiên, tổng deadline ~5s):
+     - **Ready** → `HumanMoveAndClickVerifiedAsync` vào link (hit-test ngay trước Down/Up vẫn là hàng
+       rào cuối).
+     - **Collapsed** (nhóm "Quản Lý Đơn Hàng" đang CỤP — đúng yêu cầu người dùng: kiểm tra rồi bung ra):
+       tìm mục cha `FindOrderMenuParentAsync` → click **verified** để bung; chờ 500–1500ms; tìm lại
+       link + đọc lại trạng thái. CHỈ click mục cha khi trạng thái là Collapsed và TỐI ĐA 1 lần trong
+       cả lượt (click lần 2 khi nhóm đã mở sẽ toggle cụp lại — cấm).
+     - **Covered** (bị popover/flyout trong cùng submenu đè) → chờ rồi đọc lại (trong deadline poll);
+       KHÔNG click mục cha ở trạng thái này.
+     - **Unknown** → thử `ScrollIntoViewIfNeededAsync` một lần rồi đọc lại; vẫn Unknown → coi như hết
+       cách bằng chuột.
+  3. **`Clicked == false`** sau khi đã xử lý trạng thái ở (2) (hoặc hết deadline poll mà chưa Ready):
+     **fallback `GotoAsync`** (nguyên khối cũ).
+  4. Link không thấy ngay từ đầu → giữ nhánh cũ (mở mục cha verified → tìm lại → không được thì
+     `GotoAsync`) — nhánh này link chưa từng thấy nên cho phép click mục cha không cần đọc trạng thái
+     (submenu nhiều khả năng chưa render); vẫn tôn trọng giới hạn 1 lần click mục cha/lượt.
   5. **`WaitShippingPageAsync` siết lại:** CHỈ còn điều kiện `ShopeeShippingNav.IsShippingSettingHref(page.Url)`
      — XÓA điều kiện `.eds-tabs__nav-tab` (trang khác cũng có eds-tabs → dương tính giả; `page.Url` của
      Playwright phản ánh cả đổi route SPA qua history API nên không cần điều kiện phụ). Cập nhật XML-doc.
@@ -182,9 +251,10 @@ if (nav != ShippingNavResult.Ok)
 
 - **Baseline TRƯỚC khi sửa:** chạy `dotnet test` ghi lại tổng số pass hiện tại (con số nền mới nhất —
   KHÔNG tin số 201 của plan cũ vì sau đó đã có thêm việc).
-- Test mới (`src/XuLyDonShopee.Tests/`): enum `ShippingNavResult` không có logic thuần đáng test riêng;
-  KHÔNG cần test Playwright (không chạy được headless ở đây). Nếu Opus tách được logic thuần nào
-  (vd: hàm quyết định retry) thì thêm test; không thì thôi — KHÔNG viết test hình thức.
+- Test mới (`src/XuLyDonShopee.Tests/ShopeeShippingNavTests.cs`): `ParseLinkReadiness` — "ready"/
+  "Ready "/"COLLAPSED\n"/"covered" → đúng enum; null/rỗng/"gibberish" → Unknown. Enum
+  `ShippingNavResult` không có logic thuần đáng test riêng; KHÔNG cần test Playwright (không chạy được
+  headless ở đây). KHÔNG viết test hình thức.
 - `dotnet build XuLyDonShopee.sln -c Debug` → 0 error/0 warning; `dotnet test` → toàn bộ pass, không đỏ
   test cũ. WDAC chặn (`0x800711C7`) → build lại `-p:Deterministic=false` rồi `dotnet test --no-build`;
   fail đồng loạt cùng mã lỗi này là policy máy, không phải code.
@@ -197,14 +267,19 @@ if (nav != ShippingNavResult.Ok)
 - [ ] Click nghiệp vụ CHỈ nhả chuột khi `document.elementFromPoint` tại điểm click trả về đúng phần tử
       đích / con / tổ tiên của nó; bị che/cụp → không click, có đường xử lý tiếp (bung mục cha → thử
       lại → Goto fallback) — KHÔNG bao giờ click mù vào tọa độ nữa.
+- [ ] TRƯỚC khi di chuột tới link, đọc trạng thái bung/cụp của nhóm "Quản Lý Đơn Hàng" bằng
+      `GetLinkReadinessAsync` (JS hình học, không cần hover): Collapsed → bung mục cha rồi mới click
+      link; Covered → chờ, KHÔNG click mục cha; click mục cha TỐI ĐA 1 lần/lượt (chống toggle cụp
+      nhóm đang mở).
 - [ ] `WaitShippingPageAsync` chỉ nhận theo URL `/portal/all-settings/shipping`; hết giờ có fallback
       Goto một lần rồi mới chịu thua.
 - [ ] `ProcessOrdersAsync` báo StatusText PHÂN BIỆT: không mở được trang ≠ không thấy tab "Địa Chỉ".
 - [ ] Like-human giữ nguyên: chuột cong, down→trễ→up, dừng ngẫu nhiên; không ClickAsync/FillAsync thẳng.
 - [ ] `HumanMoveAndClickAsync` gốc (login flow) hành vi không đổi.
 - [ ] Build 0 error/0 warning; toàn bộ test cũ pass (baseline đo trước khi sửa).
-- [ ] Chỉ sửa: `ShopeeLoginService.cs`, `AccountSession.cs`, `ShippingNavResult.cs` (mới),
-      (tùy chọn) test mới trong `src/XuLyDonShopee.Tests/`.
+- [ ] Chỉ sửa: `ShopeeLoginService.cs`, `AccountSession.cs`, `ShopeeShippingNav.cs` (thêm
+      `LinkReadiness` + `ParseLinkReadiness`), `ShippingNavResult.cs` (mới),
+      `ShopeeShippingNavTests.cs` (thêm test parser).
 
 ## 5. Rủi ro & lưu ý
 
