@@ -140,7 +140,7 @@ public interface ILoginSession : IAsyncDisposable
     /// trong modal <b>"Giao Đơn Hàng"</b> chọn <b>"Tôi sẽ tự mang hàng tới Bưu cục"</b> (mặc định đã chọn)
     /// → bấm <b>"Xác nhận"</b> → chờ modal <b>"Thông Tin Chi Tiết"</b> → <b>CHỜ nút "In phiếu giao" bấm được
     /// tới 5 phút</b> (Shopee tạo mã vận đơn có thể lâu, có log tiến trình 30s) rồi bấm → BẮT
-    /// tab phiếu mới, CHỤP màn hình phiếu (PNG) + lưu PDF thật về <paramref name="downloadDir"/> (KHÔNG gửi
+    /// tab phiếu mới, lưu phiếu PDF (ưu tiên bản GỐC từ blob) về <paramref name="downloadDir"/> (KHÔNG gửi
     /// lệnh in — lưu để in sau) rồi ĐÓNG tab. <b>Toàn bộ click bằng thao tác kiểu người CÓ HIT-TEST</b> (di chuột cong, click
     /// down→trễ→up, có dừng "đọc trang" ngẫu nhiên; KHÔNG dùng ClickAsync/Fill/native). Mỗi bước gọi
     /// <paramref name="log"/> (nếu có) để theo dõi live.
@@ -148,7 +148,7 @@ public interface ILoginSession : IAsyncDisposable
     /// <b>Graceful — không bao giờ ném:</b> mọi lỗi/hủy → trả một giá trị <see cref="ArrangeShipmentResult"/>
     /// (KHÔNG phá phiên). <see cref="ArrangeShipmentResult.NoOrder"/> khi danh sách rỗng;
     /// <see cref="ArrangeShipmentResult.Ok"/> khi đã qua bước "In phiếu giao" (bắt được tab phiếu). Việc
-    /// chụp/lưu phiếu là <b>best-effort có log</b> — thất bại chỉ cảnh báo, KHÔNG hạ kết quả xuống fail (đơn đã
+    /// lưu phiếu là <b>best-effort có log</b> — thất bại chỉ cảnh báo, KHÔNG hạ kết quả xuống fail (đơn đã
     /// được arrange). Chỉ làm MỘT đơn (chạy 1 lần).
     /// </para>
     /// </summary>
@@ -2472,7 +2472,7 @@ public class ShopeeLoginService
                 }
                 L($"Đã bắt được tab phiếu ({(SafeUrlHasAwbprint(newPage) ? "awbprint OK" : "URL chưa phải awbprint")}).");
 
-                // Từ đây: CHỤP/LƯU best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
+                // Từ đây: LƯU phiếu best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
                 await SaveSlipAsync(newPage, downloadDir, orderCode, L, ct).ConfigureAwait(false);
 
                 // Đóng modal "Thông Tin Chi Tiết" bằng nút X (modal KHÔNG tự đóng sau khi in) rồi mới coi là
@@ -2502,27 +2502,20 @@ public class ShopeeLoginService
 
         /// <summary>Ngưỡng bytes tối thiểu để coi một PDF render (<c>printToPDF</c>) là "có nội dung thật":
         /// nhỏ hơn ngưỡng này gần như chắc là bản TRẮNG (phiếu nằm trong khung nhúng mà <c>printToPDF</c> của
-        /// trang bọc không vẽ được) → KHÔNG tính là đã có PDF thật, dùng ảnh PNG thay thế.</summary>
+        /// trang bọc không vẽ được) → KHÔNG tính là đã có PDF thật (bỏ bản render, thử fallback GET URL).</summary>
         private const int MinRealSlipPdfBytes = 3000;
 
-        /// <summary>Kích thước file (bytes) — nuốt lỗi (file chưa có/không đọc được) trả 0. Chỉ để log.</summary>
-        private static long SafeFileLength(string path)
-        {
-            try { return new FileInfo(path).Length; } catch { return 0; }
-        }
-
         /// <summary>
-        /// Trên TAB PHIẾU (trang HTML "Xem trước bản in"): CHỜ nội dung phiếu thật sự hiện → CHỤP màn hình cả
-        /// trang lưu <b>PNG</b> (artifact CHÍNH — chắc chắn đúng cái mắt thấy) → cố lấy <b>PDF thật</b> về
-        /// <paramref name="downloadDir"/> (artifact PHỤ) → ĐÓNG tab. <b>KHÔNG gửi lệnh in nào</b> (bỏ theo yêu
-        /// cầu — lưu phiếu để in sau). <b>Best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được
-        /// arrange). Mọi thao tác trên tab CHỈ ĐỌC DOM (đếm iframe/embed/object + ảnh, screenshot, printToPDF)
-        /// — KHÔNG click, KHÔNG vá/hook JS (quy tắc stealth). PDF thật thử lần lượt: (e0) nếu khung nhúng là
-        /// <c>blob:</c> URL (phiếu PDF GỐC Shopee tạo, nhúng qua trình xem PDF) → <c>fetch</c> blob NGAY trong
-        /// trang → base64 → giải mã (%PDF-check) — ĐÂY là file in chuẩn nhất (chỉ phiếu, đúng khổ); (e1) GET src
-        /// khung nhúng đầu tiên (http[s]) qua <c>APIRequest</c> — %PDF/content-type check; (e2) CDP
-        /// <c>Page.printToPDF</c> (<see cref="LooksPdf"/>-check + ngưỡng <see cref="MinRealSlipPdfBytes"/> chống
-        /// bản trắng); (e3) GET page-URL fallback. Coi là "đã lưu phiếu" khi PNG chụp OK <b>hoặc</b> có PDF ≥ ngưỡng.
+        /// Trên TAB PHIẾU (trang HTML "Xem trước bản in"): CHỜ nội dung phiếu thật sự hiện → lấy <b>PDF</b> về
+        /// <paramref name="downloadDir"/> → ĐÓNG tab. <b>KHÔNG gửi lệnh in nào</b> (bỏ theo yêu cầu — lưu phiếu
+        /// để in sau). <b>Best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được arrange). Mọi thao
+        /// tác trên tab CHỈ ĐỌC DOM (đếm iframe/embed/object + ảnh, printToPDF) — KHÔNG click, KHÔNG vá/hook JS
+        /// (quy tắc stealth). PDF thử lần lượt: (e0) nếu khung nhúng là <c>blob:</c> URL (phiếu PDF GỐC Shopee
+        /// tạo, nhúng qua trình xem PDF) → <c>fetch</c> blob NGAY trong trang → base64 → giải mã (%PDF-check) —
+        /// ĐÂY là file in chuẩn nhất (chỉ phiếu, đúng khổ); (e1) GET src khung nhúng đầu tiên (http[s]) qua
+        /// <c>APIRequest</c> — %PDF/content-type check; (e2) CDP <c>Page.printToPDF</c> (<see cref="LooksPdf"/>-check
+        /// + ngưỡng <see cref="MinRealSlipPdfBytes"/> chống bản trắng); (e3) GET page-URL fallback. Coi là "đã lưu
+        /// phiếu" khi có PDF ≥ ngưỡng.
         /// </summary>
         private async Task SaveSlipAsync(
             IPage newPage, string downloadDir, string orderCode, Action<string> L, CancellationToken ct)
@@ -2538,7 +2531,7 @@ public class ShopeeLoginService
             try { await newPage.WaitForLoadStateAsync(LoadState.Load,
                 new PageWaitForLoadStateOptions { Timeout = 10_000 }).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
-            catch { /* tab phiếu có thể vẫn đang tải — vẫn thử chụp/tải bên dưới */ }
+            catch { /* tab phiếu có thể vẫn đang tải — vẫn thử tải PDF bên dưới */ }
 
             string url;
             try { url = newPage.Url; } catch { url = string.Empty; }
@@ -2620,12 +2613,12 @@ public class ShopeeLoginService
 
             if (contentReady)
             {
-                // Cho khung nhúng kịp vẽ trước khi chụp.
+                // Cho khung nhúng kịp vẽ trước khi lấy PDF.
                 await Task.Delay(rng.Next(1500, 2500), ct).ConfigureAwait(false);
             }
             else
             {
-                L("Không thấy dấu hiệu nội dung phiếu sau 25s — ảnh chụp có thể trắng.");
+                L("Không thấy dấu hiệu nội dung phiếu sau 25s — PDF render có thể trắng.");
             }
 
             // c. Src http(s) ĐẦU TIÊN của khung nhúng (bản ĐẦY ĐỦ để GET PDF thật ở e1) + MỘT dòng chẩn đoán
@@ -2642,42 +2635,11 @@ public class ShopeeLoginService
             var srcInfo = logSrc.Length > 0 ? $" (src={logSrc})" : string.Empty;
             L($"Tab phiếu DOM: {iframeCount} iframe{srcInfo}, {embedCount} embed, {objectCount} object, {imgReady} ảnh.");
 
-            // d. CHỤP MÀN HÌNH (artifact CHÍNH). FullPage lỗi (plugin/khung nhúng) → thử lại FullPage=false.
-            bool pngSaved = false;
-            if (dir.Length > 0)
-            {
-                var pngPath = Path.Combine(dir, safeName + ".png");
-                try
-                {
-                    await newPage.ScreenshotAsync(new PageScreenshotOptions { FullPage = true, Path = pngPath })
-                        .ConfigureAwait(false);
-                    pngSaved = true;
-                    L($"Đã chụp phiếu (PNG): {pngPath} ({SafeFileLength(pngPath)} bytes).");
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex1)
-                {
-                    L("Chụp PNG FullPage lỗi (" + ex1.Message + ") — thử lại FullPage=false.");
-                    try
-                    {
-                        await newPage.ScreenshotAsync(new PageScreenshotOptions { FullPage = false, Path = pngPath })
-                            .ConfigureAwait(false);
-                        pngSaved = true;
-                        L($"Đã chụp phiếu (PNG): {pngPath} ({SafeFileLength(pngPath)} bytes).");
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex2)
-                    {
-                        L("Cảnh báo: chụp PNG cả hai lần đều lỗi: " + ex2.Message);
-                    }
-                }
-            }
-
             // Sau vòng chờ nội dung: tab có thể đã điều hướng từ about:blank sang awbprint → đọc lại URL để e3
             // GET đúng trang phiếu (không GET "about:blank"). Đọc lỗi → giữ url cũ.
             try { var u2 = newPage.Url; if (!string.IsNullOrEmpty(u2)) url = u2; } catch { /* giữ url cũ */ }
 
-            // e. Lấy PDF thật (artifact PHỤ, best-effort) — thử lần lượt tới khi được.
+            // e. Lấy PDF (artifact DUY NHẤT, best-effort) — thử lần lượt tới khi được.
             bool pdfReal = false;
             if (dir.Length > 0)
             {
@@ -2801,7 +2763,7 @@ public class ShopeeLoginService
                                 }
                                 else
                                 {
-                                    L($"PDF render nghi TRẮNG ({bytes.Length} bytes) — dùng file PNG thay thế.");
+                                    L($"PDF render nghi TRẮNG ({bytes.Length} bytes) — bỏ, thử GET URL.");
                                 }
                             }
                             else
@@ -2850,10 +2812,10 @@ public class ShopeeLoginService
                 }
             }
 
-            // f. Tổng kết: "đã lưu phiếu" khi PNG chụp OK HOẶC có PDF ≥ ngưỡng.
-            if (!pngSaved && !pdfReal)
+            // f. Tổng kết: "đã lưu phiếu" khi có PDF ≥ ngưỡng.
+            if (!pdfReal)
             {
-                L("Cảnh báo: CHƯA lưu được phiếu có nội dung — kiểm tra tay trong Brave.");
+                L("Cảnh báo: CHƯA lưu được phiếu PDF — kiểm tra tay trong Brave.");
             }
 
             // ===== ĐÓNG tab phiếu (KHÔNG gửi lệnh in nào) =====
