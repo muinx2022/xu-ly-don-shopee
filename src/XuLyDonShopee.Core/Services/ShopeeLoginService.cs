@@ -2114,8 +2114,30 @@ public class ShopeeLoginService
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
 
                 // 1) Về danh sách đơn "Tất cả" (/portal/sale/order — trang tự vào tab "Chờ xử lý").
+                //    Nếu ĐÃ ở trang danh sách (đơn thứ 2+ trong lượt): RELOAD SẠCH bằng GotoAsync thay vì click
+                //    menu SPA. Lý do: điều hướng SPA (click menu) KHÔNG dựng lại DOM → xác modal cũ ("Thông Tin
+                //    Chi Tiết" của đơn trước, bị Vue giữ lại dạng ẩn/bẹp) tích tụ xuyên các đơn, đẩy nút MA lên
+                //    TRƯỚC nút "In phiếu giao" thật → bước in kẹt (đơn đầu lượt DOM sạch nên luôn ngon). GotoAsync
+                //    = người gõ URL/F5 → DOM sạch, mỗi đơn khởi đầu sạch. URL khác trang danh sách → vẫn về bằng
+                //    GoToAllOrdersAsync (click menu kiểu người).
                 L("Về danh sách đơn (Tất cả)...");
-                (mx, my) = await GoToAllOrdersAsync(page, mx, my, rng, ct).ConfigureAwait(false);
+                if (ShopeeShippingNav.IsAllOrdersHref(page.Url))
+                {
+                    try
+                    {
+                        await page.GotoAsync(AllOrdersUrl, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = 30000
+                        }).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { /* nuốt lỗi điều hướng — kiểm page.Url ngay dưới */ }
+                }
+                else
+                {
+                    (mx, my) = await GoToAllOrdersAsync(page, mx, my, rng, ct).ConfigureAwait(false);
+                }
                 if (!ShopeeShippingNav.IsAllOrdersHref(page.Url))
                 {
                     return ArrangeShipmentResult.OrdersPageNotOpened;
@@ -2250,8 +2272,10 @@ public class ShopeeLoginService
                     // best-effort, nuốt lỗi (OCE vẫn ném), chẩn đoán fail KHÔNG được phá luồng.
                     try
                     {
-                        // Phản chiếu ĐÚNG đường tìm nút thật của WaitPrintButtonClickableAsync: (a) testid trước;
-                        // (b) fallback quét mọi button theo TEXT chuẩn hóa "in phiếu giao" + phải có bounding box.
+                        // Chẩn đoán CỐ Ý chụp nút ĐẦU theo thứ tự DOM (document.querySelector / vòng dừng ở nút
+                        // khớp đầu tiên) — thường là nút MA của modal CŨ (box bẹp, tâm bị vỏ modal khác đè) — để
+                        // LOG bằng chứng vì sao bấm kẹt. KHÁC đường bấm THẬT (WaitPrintButtonClickableAsync giờ
+                        // duyệt TẤT CẢ ứng viên, thứ tự NGƯỢC): (a) testid trước; (b) fallback theo TEXT "in phiếu giao".
                         const string diagJs = @"() => {
                             const fmt = (btn, via) => {
                                 const r = btn.getBoundingClientRect();
@@ -3049,15 +3073,41 @@ public class ShopeeLoginService
             return null;
         }
 
+        /// <summary>Ứng viên nút BẤM ĐƯỢC khi có bounding box VÀ tâm box HIT-TEST PASS (<c>elementFromPoint</c>
+        /// tại tâm là nút / con / tổ tiên của nút — không bị lớp khác đè). Handle stale (modal re-render) hoặc
+        /// lỗi đọc khác → <c>false</c> (KHÔNG ném) để lượt duyệt thử ứng viên KẾ.</summary>
+        private static async Task<bool> IsCandidateClickableAsync(IElementHandle cand)
+        {
+            try
+            {
+                var box = await cand.BoundingBoxAsync().ConfigureAwait(false);
+                if (box is null)
+                {
+                    return false;
+                }
+                double cx = box.X + box.Width / 2.0, cy = box.Y + box.Height / 2.0;
+                return await IsPointOnElementAsync(cand, cx, cy).ConfigureAwait(false);
+            }
+            catch { return false; }
+        }
+
         /// <summary>
         /// Chờ nút in (<c>button[data-testid='print-button']</c>) tới khi <b>THẬT SỰ BẤM ĐƯỢC</b> (không chỉ
         /// có bounding box): nút có thể hiện MUỘN và lúc mới hiện còn bị LỚP CHE đè (có box nhưng
         /// <c>elementFromPoint</c> tại nút trả lớp overlay → click không ăn). Poll tới hết
-        /// <paramref name="timeoutMs"/>: RE-FIND nút TƯƠI mỗi vòng (query PAGE-level, không giữ handle stale),
-        /// tìm được candidate có box → tính tâm (cx,cy) rồi HIT-TEST bằng <see cref="IsPointOnElementAsync"/>;
-        /// CHỈ trả khi hit-test PASS (lớp che đã tan). Ưu tiên <c>button[data-testid='print-button']</c>,
-        /// fallback button khớp <paramref name="textMatch"/> có bounding box. Giờ CHỈ dùng cho nút "In phiếu
-        /// giao" trong modal (<see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>). Không đạt → <c>null</c>.
+        /// <paramref name="timeoutMs"/> (RE-QUERY tươi mỗi vòng, KHÔNG giữ handle stale qua các lượt).
+        /// <para>
+        /// QUAN TRỌNG — duyệt <b>TẤT CẢ</b> ứng viên, thứ tự <b>NGƯỢC</b> (từ CUỐI DOM lên): eds-modal của Vue
+        /// GIỮ LẠI modal "Thông Tin Chi Tiết" của ĐƠN TRƯỚC trong DOM (dạng ẩn/bẹp) sau khi đóng bằng nút X,
+        /// nên DOM có thể chứa ≥2 nút <c>print-button</c> — nút MA của modal CŨ đứng TRƯỚC, nút THẬT của modal
+        /// hiện tại append CUỐI body. Nếu chỉ tin PHẦN TỬ ĐẦU (như <see cref="FirstVisibleByBoxAsync"/>) sẽ vớ
+        /// đúng nút ma, hit-test fail vĩnh viễn, KHÔNG BAO GIỜ thử nút thật (bằng chứng log 16:47:04 đơn thứ 2:
+        /// <c>via=testid, box=191x16, elementFromPoint=div.eds-modal__container</c> — nút bẹp, tâm bị vỏ modal
+        /// khác đè). Duyệt ngược → gặp nút THẬT trước; HIT-TEST TỪNG ứng viên (<see cref="IsCandidateClickableAsync"/>),
+        /// PASS đầu tiên trả NGAY. Ưu tiên <c>button[data-testid='print-button']</c>, fallback mọi button khớp
+        /// <paramref name="textMatch"/>. Giờ CHỈ dùng cho nút "In phiếu giao" (<see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>).
+        /// Không ứng viên nào pass tới hết deadline → <c>null</c>.
+        /// </para>
         /// </summary>
         private static async Task<IElementHandle?> WaitPrintButtonClickableAsync(
             IPage page, Func<string?, bool> textMatch, int timeoutMs, CancellationToken ct)
@@ -3067,41 +3117,45 @@ public class ShopeeLoginService
             {
                 ct.ThrowIfCancellationRequested();
 
-                IElementHandle? cand = await FirstVisibleByBoxAsync(page, "button[data-testid='print-button']", ct).ConfigureAwait(false);
-                if (cand is null)
+                // (a) Ưu tiên nút CÓ data-testid='print-button'. Duyệt TẤT CẢ ứng viên theo thứ tự NGƯỢC
+                //     (modal mới nhất append CUỐI body → nút THẬT đứng SAU nút MA của modal cũ). Hit-test
+                //     PASS đầu tiên → trả NGAY.
+                try
                 {
-                    try
+                    var byId = await page.QuerySelectorAllAsync("button[data-testid='print-button']").ConfigureAwait(false);
+                    for (int i = byId.Count - 1; i >= 0; i--)
                     {
-                        var buttons = await page.QuerySelectorAllAsync("button").ConfigureAwait(false);
-                        foreach (var b in buttons)
+                        if (await IsCandidateClickableAsync(byId[i]).ConfigureAwait(false))
                         {
-                            if (textMatch(await b.InnerTextAsync().ConfigureAwait(false))
-                                && await b.BoundingBoxAsync().ConfigureAwait(false) is not null)
-                            {
-                                cand = b;
-                                break;
-                            }
+                            return byId[i];
                         }
                     }
-                    catch { /* chưa render — thử vòng sau */ }
                 }
+                catch (OperationCanceledException) { throw; }
+                catch { /* chưa render / selector — thử vòng sau */ }
 
-                if (cand is not null)
+                // (b) Chưa ứng viên testid nào pass → fallback quét MỌI button theo TEXT (chuẩn hóa), cũng
+                //     duyệt NGƯỢC. Bọc try/catch TỪNG ứng viên: một nút stale (modal cũ vừa bị Vue gỡ giữa
+                //     chừng) không được phá cả lượt duyệt các nút còn lại.
+                try
                 {
-                    try
+                    var buttons = await page.QuerySelectorAllAsync("button").ConfigureAwait(false);
+                    for (int i = buttons.Count - 1; i >= 0; i--)
                     {
-                        var box = await cand.BoundingBoxAsync().ConfigureAwait(false);
-                        if (box is not null)
+                        var b = buttons[i];
+                        bool match;
+                        try { match = textMatch(await b.InnerTextAsync().ConfigureAwait(false)); }
+                        catch (OperationCanceledException) { throw; }
+                        catch { continue; /* nút stale → bỏ, thử nút kế */ }
+
+                        if (match && await IsCandidateClickableAsync(b).ConfigureAwait(false))
                         {
-                            double cx = box.X + box.Width / 2.0, cy = box.Y + box.Height / 2.0;
-                            if (await IsPointOnElementAsync(cand, cx, cy).ConfigureAwait(false))
-                            {
-                                return cand; // nút hit-testable (lớp che đã tan) → bấm được
-                            }
+                            return b;
                         }
                     }
-                    catch { /* handle stale (modal re-render) → tìm lại vòng sau */ }
                 }
+                catch (OperationCanceledException) { throw; }
+                catch { /* chưa render — thử vòng sau */ }
 
                 await Task.Delay(400, ct).ConfigureAwait(false);
             }

@@ -1,7 +1,7 @@
 # Plan: Fix nút "In phiếu giao" ma — modal cũ còn trong DOM làm đơn thứ 2 trở đi kẹt
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng smoke loạt ≥2 đơn)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -74,4 +74,6 @@ Mục tiêu — 2 lớp fix:
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus thực thi đủ A/B trong 1 file `ShopeeLoginService.cs`: (A) `WaitPrintButtonClickableAsync` re-query tươi mỗi lượt, duyệt TẤT CẢ ứng viên testid rồi text theo thứ tự NGƯỢC, hit-test từng ứng viên qua helper mới `IsCandidateClickableAsync` (box + elementFromPoint tại tâm; lỗi → false), OCE ném xuyên; (B) `ProcessFirstOrderAsync` bước 1: URL đã ở trang danh sách → `GotoAsync(AllOrdersUrl)` reload sạch DOM (nuốt lỗi điều hướng, kiểm URL sau như cũ), URL khác → `GoToAllOrdersAsync` như cũ. Kèm cập nhật doc-comment (gồm comment đoạn diagJs — nói rõ chẩn đoán cố ý chụp nút ĐẦU làm bằng chứng, khác đường bấm thật). Khác plan (đã duyệt): tách helper `IsCandidateClickableAsync` thay vì inline.
+
+Nghiệm thu (Fable): tự build 0 warning + 392/392 test xanh; panel rà soát đối kháng 2/3 phiếu — KHÔNG có lỗi mới do diff; 1 phát hiện mức thấp được giữ là lỗi CÓ SẴN trước diff (race hiếm: handle nút detach giữa lúc hit-test pass và lúc bấm → một cú click mù, vòng chờ tự thử lại; panel xác nhận diff không nới rộng) — ghi nợ, chưa sửa đợt này. Smoke thật: CHỜ NGƯỜI DÙNG chạy lượt ≥2–3 đơn, kỳ vọng đơn thứ 2+ bấm được "In phiếu giao" trong vài giây.
