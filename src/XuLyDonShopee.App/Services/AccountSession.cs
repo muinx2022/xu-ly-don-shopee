@@ -568,8 +568,12 @@ public partial class AccountSession : ObservableObject, IAccountSession
         var log = (Action<string>)(m => _services.Log.Append(_logLabel, m));
         try
         {
+            // Tập đơn ĐÃ có "Số tiền cuối cùng" trong DB → Core bỏ qua mở lại chi tiết cho các đơn này (tối ưu:
+            // lần đầu lâu, các lần sau nhanh). Đọc từ DB trước mỗi lượt sync để đón số đã lấy ở lượt trước.
+            var alreadyHaveFinal = _services.Orders.GetOrderSnsWithFinalAmount(_accountId);
+
             // Core thu thập (best-effort có log tiến trình từng trang), trả DTO — KHÔNG đụng DB.
-            var result = await s.SyncAllOrdersAsync(log, tok).ConfigureAwait(false);
+            var result = await s.SyncAllOrdersAsync(log, alreadyHaveFinal, tok).ConfigureAwait(false);
 
             // Lưu về DB (thread nền — SQLite an toàn): upsert theo (account_id, order_sn).
             var (inserted, updated) = _services.Orders.UpsertMany(_accountId, result.Orders, DateTime.UtcNow);

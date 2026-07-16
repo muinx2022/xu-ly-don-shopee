@@ -1,7 +1,7 @@
 # Plan: Sync lấy thêm "Số tiền cuối cùng" từ trang chi tiết đơn → cột "Ước tính" ở màn Đơn hàng
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** chờ (làm SAU khi `2026-07-17-man-don-hang-link-in-phieu.md` merge — đụng cùng OrdersView/OrderRowViewModel/ShopeeLoginService)
+- **Trạng thái:** đang làm (làm SAU khi `2026-07-17-man-don-hang-link-in-phieu.md` merge — đụng cùng OrdersView/OrderRowViewModel/ShopeeLoginService)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu

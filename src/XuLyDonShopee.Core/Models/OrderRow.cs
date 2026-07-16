@@ -32,6 +32,12 @@ public sealed class OrderRow
     /// <summary>Nguyên văn tổng tiền (vd "₫166.500"). Có thể null.</summary>
     public string? TotalPriceText { get; init; }
 
+    /// <summary>"Số tiền cuối cùng" đã parse (VND) từ trang chi tiết đơn — cột "Ước tính". Có thể null.</summary>
+    public long? FinalAmount { get; init; }
+
+    /// <summary>Nguyên văn "Số tiền cuối cùng" (vd "₫292.010"). Có thể null.</summary>
+    public string? FinalAmountText { get; init; }
+
     /// <summary>Hình thức thanh toán. Có thể null.</summary>
     public string? PaymentMethod { get; init; }
 

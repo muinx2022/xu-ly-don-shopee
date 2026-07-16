@@ -44,6 +44,55 @@ CREATE TABLE accounts (
         }
     }
 
+    /// <summary>Dựng schema orders CŨ (thiếu cột final_amount / final_amount_text) rồi ghi 1 đơn dữ liệu sẵn.</summary>
+    private static void CreateOldOrdersSchemaWithRow(string path, long accountId, string orderSn)
+    {
+        var cs = new SqliteConnectionStringBuilder { DataSource = path }.ToString();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            // Bản schema orders TRƯỚC khi thêm 2 cột final_* (đủ các cột cũ, KHÔNG có final_amount/final_amount_text).
+            cmd.CommandText = @"
+CREATE TABLE orders (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id         INTEGER NOT NULL,
+    order_sn           TEXT NOT NULL,
+    shopee_order_id    TEXT,
+    buyer_username     TEXT,
+    items_json         TEXT,
+    item_count         INTEGER,
+    item_summary       TEXT,
+    total_price        INTEGER,
+    total_price_text   TEXT,
+    payment_method     TEXT,
+    status             TEXT,
+    status_description TEXT,
+    cancel_reason      TEXT,
+    channel            TEXT,
+    carrier            TEXT,
+    tracking_number    TEXT,
+    synced_at          TEXT,
+    created_at         TEXT,
+    updated_at         TEXT,
+    UNIQUE(account_id, order_sn)
+);";
+            cmd.ExecuteNonQuery();
+        }
+
+        using (var ins = conn.CreateCommand())
+        {
+            ins.CommandText = @"INSERT INTO orders
+    (account_id, order_sn, total_price, total_price_text, status, synced_at, created_at, updated_at)
+    VALUES ($acc, $sn, 166500, '₫166.500', 'Chờ lấy hàng',
+            '2026-07-16T00:00:00.0000000', '2026-07-16T00:00:00.0000000', '2026-07-16T00:00:00.0000000');";
+            ins.Parameters.AddWithValue("$acc", accountId);
+            ins.Parameters.AddWithValue("$sn", orderSn);
+            ins.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>Kiểm tra bảng có cột hay không qua PRAGMA table_info (cột name ở chỉ số 1).</summary>
     private static bool HasColumn(string path, string table, string column)
     {
@@ -162,5 +211,50 @@ CREATE TABLE accounts (
         repo.Update(acc);
 
         Assert.Equal("Hà Nội", repo.GetById(acc.Id)!.PickupAddress);
+    }
+
+    // ===================== Migration cột final_amount cho bảng orders =====================
+
+    [Fact]
+    public void KhoiTao_DbCu_Orders_ThieuFinalAmount_DuocThemCot_KhongMatDuLieu()
+    {
+        using var temp = new TempDatabase();
+        CreateOldOrdersSchemaWithRow(temp.Path, accountId: 5, orderSn: "SNOLD");
+
+        // Trước migration: schema orders cũ chưa có cột final_amount / final_amount_text.
+        Assert.False(HasColumn(temp.Path, "orders", "final_amount"));
+        Assert.False(HasColumn(temp.Path, "orders", "final_amount_text"));
+
+        // Khởi tạo Database mới trỏ cùng file → Initialize() chạy migration ALTER TABLE.
+        _ = new Database(temp.Path);
+
+        // Sau migration: đã có 2 cột.
+        Assert.True(HasColumn(temp.Path, "orders", "final_amount"));
+        Assert.True(HasColumn(temp.Path, "orders", "final_amount_text"));
+
+        // Dữ liệu đơn cũ CÒN NGUYÊN; final_amount mặc định null.
+        var repo = new OrdersRepository(new Database(temp.Path));
+        var row = Assert.Single(repo.Query(accountId: 5));
+        Assert.Equal("SNOLD", row.OrderSn);
+        Assert.Equal(166500, row.TotalPrice);
+        Assert.Null(row.FinalAmount);
+        Assert.Null(row.FinalAmountText);
+    }
+
+    [Fact]
+    public void KhoiTao_DbCu_Orders_SauMigration_UpsertFinalAmountBinhThuong()
+    {
+        using var temp = new TempDatabase();
+        CreateOldOrdersSchemaWithRow(temp.Path, accountId: 5, orderSn: "SNOLD");
+
+        var repo = new OrdersRepository(new Database(temp.Path)); // migration chạy tại đây
+        repo.UpsertMany(5, new[]
+        {
+            new SyncedOrder { OrderSn = "SNOLD", FinalAmount = 292010, FinalAmountText = "₫292.010" }
+        }, DateTime.UtcNow);
+
+        var row = Assert.Single(repo.Query(accountId: 5));
+        Assert.Equal(292010, row.FinalAmount);
+        Assert.Equal("₫292.010", row.FinalAmountText);
     }
 }

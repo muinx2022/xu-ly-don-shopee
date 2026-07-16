@@ -19,6 +19,8 @@ public class OrdersRepositoryTests
         ItemSummary = "Giày",
         TotalPriceText = "₫166.500",
         TotalPrice = 166500,
+        FinalAmount = 160000,
+        FinalAmountText = "₫160.000",
         PaymentMethod = "Thanh toán khi nhận hàng",
         Status = "Đã hủy",
         StatusDescription = "Đã hủy tự động bởi hệ thống Shopee",
@@ -112,8 +114,78 @@ public class OrdersRepositoryTests
         Assert.Equal("1", ReadString(db, "SN9", "item_count"));
         Assert.Equal("166500", ReadString(db, "SN9", "total_price"));
         Assert.Equal("₫166.500", ReadString(db, "SN9", "total_price_text"));
+        Assert.Equal("160000", ReadString(db, "SN9", "final_amount"));
+        Assert.Equal("₫160.000", ReadString(db, "SN9", "final_amount_text"));
         Assert.Equal("SPXVN068067521447", ReadString(db, "SN9", "tracking_number"));
         Assert.Equal("Hủy đơn hàng vì hành vi giao dịch bất thường.", ReadString(db, "SN9", "cancel_reason"));
+    }
+
+    [Fact]
+    public void UpsertMany_CapNhat_FinalAmountNull_GiuGiaTriCu()
+    {
+        using var temp = new TempDatabase();
+        var db = temp.Open();
+        var repo = new OrdersRepository(db);
+
+        // Lần 1: đơn có "Số tiền cuối cùng" (đã mở chi tiết lấy được).
+        var first = Sample("SN1");
+        first.FinalAmount = 292010;
+        first.FinalAmountText = "₫292.010";
+        repo.UpsertMany(1, new[] { first }, DateTime.UtcNow);
+
+        // Lần 2: cùng đơn nhưng lần này KHÔNG lấy final (final = null) → COALESCE GIỮ số cũ, KHÔNG ghi đè null.
+        var again = Sample("SN1");
+        again.FinalAmount = null;
+        again.FinalAmountText = null;
+        again.TotalPrice = 200000; // trường khác vẫn cập nhật bình thường
+        repo.UpsertMany(1, new[] { again }, DateTime.UtcNow);
+
+        Assert.Equal("292010", ReadString(db, "SN1", "final_amount"));        // GIỮ số cũ
+        Assert.Equal("₫292.010", ReadString(db, "SN1", "final_amount_text"));
+        Assert.Equal("200000", ReadString(db, "SN1", "total_price"));         // trường khác vẫn đè
+    }
+
+    [Fact]
+    public void UpsertMany_CapNhat_FinalAmountMoi_GhiDe()
+    {
+        using var temp = new TempDatabase();
+        var db = temp.Open();
+        var repo = new OrdersRepository(db);
+
+        var first = Sample("SN1");
+        first.FinalAmount = 100000;
+        first.FinalAmountText = "₫100.000";
+        repo.UpsertMany(1, new[] { first }, DateTime.UtcNow);
+
+        // Lần 2 có final MỚI → đè giá trị cũ (COALESCE lấy giá trị mới vì khác null).
+        var again = Sample("SN1");
+        again.FinalAmount = 292010;
+        again.FinalAmountText = "₫292.010";
+        repo.UpsertMany(1, new[] { again }, DateTime.UtcNow);
+
+        Assert.Equal("292010", ReadString(db, "SN1", "final_amount"));
+        Assert.Equal("₫292.010", ReadString(db, "SN1", "final_amount_text"));
+    }
+
+    [Fact]
+    public void GetOrderSnsWithFinalAmount_ChiTraDonCoFinalAmount_TheoTaiKhoan()
+    {
+        using var temp = new TempDatabase();
+        var repo = new OrdersRepository(temp.Open());
+
+        var withFinal = Sample("HASFINAL");   // Sample mặc định có FinalAmount = 160000
+        var noFinal = Sample("NOFINAL");
+        noFinal.FinalAmount = null;
+        noFinal.FinalAmountText = null;
+        repo.UpsertMany(1, new[] { withFinal, noFinal }, DateTime.UtcNow);
+        repo.UpsertMany(2, new[] { Sample("OTHERACC") }, DateTime.UtcNow); // tài khoản khác → không lẫn
+
+        var set = repo.GetOrderSnsWithFinalAmount(1);
+
+        Assert.Contains("HASFINAL", set);
+        Assert.DoesNotContain("NOFINAL", set);    // final_amount NULL → không trả
+        Assert.DoesNotContain("OTHERACC", set);   // của tài khoản 2
+        Assert.Single(set);
     }
 
     [Fact]
@@ -169,6 +241,8 @@ public class OrdersRepositoryTests
         Assert.Equal("Giày", row.ItemSummary);
         Assert.Equal(166500, row.TotalPrice);
         Assert.Equal("₫166.500", row.TotalPriceText);
+        Assert.Equal(160000, row.FinalAmount);
+        Assert.Equal("₫160.000", row.FinalAmountText);
         Assert.Equal("Đã hủy", row.Status);
         Assert.Equal("SPX Express", row.Carrier);
         Assert.Equal("SPXVN068067521447", row.TrackingNumber);

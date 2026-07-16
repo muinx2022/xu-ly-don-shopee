@@ -11,21 +11,31 @@ public class OrderCsvExporterTests
 {
     private static OrderExportRow Row(
         string account = "shop@a.com", string sn = "SN1", string buyer = "buyer",
-        string product = "Giày", string total = "₫166.500", string payment = "COD",
-        string status = "Đã hủy", string note = "", string carrier = "SPX",
+        string product = "Giày", string total = "₫166.500", string estimate = "₫160.000",
+        string payment = "COD", string status = "Đã hủy", string note = "", string carrier = "SPX",
         string tracking = "SPX1", string synced = "16/07/2026 09:30")
-        => new(account, sn, buyer, product, total, payment, status, note, carrier, tracking, synced);
+        => new(account, sn, buyer, product, total, estimate, payment, status, note, carrier, tracking, synced);
 
     [Fact]
-    public void BuildCsv_DongDauLaHeaderDayDu11Cot()
+    public void BuildCsv_DongDauLaHeaderDayDu12Cot()
     {
         var csv = OrderCsvExporter.BuildCsv(new[] { Row() });
 
         var firstLine = csv.Split("\r\n")[0];
         Assert.Equal(
-            "Tài khoản,Mã đơn,Người mua,Sản phẩm,Tổng tiền,Thanh toán,Trạng thái,Mô tả/Lý do hủy,ĐVVC,Mã vận đơn,Sync lúc",
+            "Tài khoản,Mã đơn,Người mua,Sản phẩm,Tổng tiền,Ước tính,Thanh toán,Trạng thái,Mô tả/Lý do hủy,ĐVVC,Mã vận đơn,Sync lúc",
             firstLine);
-        Assert.Equal(11, OrderCsvExporter.Headers.Length);
+        Assert.Equal(12, OrderCsvExporter.Headers.Length);
+    }
+
+    [Fact]
+    public void BuildCsv_CotUocTinh_NgaySauCotTongTien()
+    {
+        var csv = OrderCsvExporter.BuildCsv(new[] { Row(total: "₫166.500", estimate: "₫160.000") });
+
+        // Dòng dữ liệu (dòng thứ 2) có "Ước tính" ngay sau "Tổng tiền".
+        var dataLine = csv.Split("\r\n")[1];
+        Assert.Contains("₫166.500,₫160.000", dataLine);
     }
 
     [Fact]
