@@ -1,9 +1,11 @@
 # Plan: Vòng lặp xử lý MỌI đơn (lặp ProcessFirstOrder tới khi hết)
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (code; smoke live chờ người dùng — cần shop có nhiều đơn "Chuẩn bị hàng")
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
-- **Nghiệm thu:** (Fable điền sau)
+- **Nghiệm thu:** Fable đọc khối vòng lặp (khớp đặc tả: while cap 200, NoOrder→break, non-Ok→break,
+  Ok→done++ + dừng người 1.5–3.5s; StatusText tổng kết; OCE re-throw giữ dừng sạch; _navigating bao trùm)
+  + tự chạy build 0/0, test **390/390**. Thay đổi App-layer nhỏ, rủi ro thấp → không panel đối kháng.
 
 ## 1. Bối cảnh & yêu cầu
 
@@ -116,4 +118,39 @@ Lưu ý:
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-(để trống)
+**Người thực thi:** Opus (`opus-executor`) · **Ngày:** 2026-07-16
+
+### Đã làm (Bước 1)
+- Sửa `src/XuLyDonShopee.App/Services/AccountSession.cs`, phương thức `ProcessOrdersAsync`, khối "Bước 3"
+  (trước đây gọi `ProcessFirstOrderAsync` MỘT lần rồi switch StatusText theo enum). Thay bằng **VÒNG LẶP**
+  đúng như code mẫu trong plan:
+  - `const int MaxOrders = 200` (chốt chặn) + `Random loopRng` + `int done` + `ArrangeShipmentResult last`.
+  - `while (done < MaxOrders)`: đặt `StatusText = "Đang xử lý đơn thứ {done+1}..."`, gọi
+    `s.ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok)`; `NoOrder` → break (hết đơn); khác `Ok` →
+    break (dừng-khi-lỗi); `Ok` → `done++` rồi `Task.Delay(loopRng.Next(1500,3500), tok)` (dừng ngẫu nhiên
+    kiểu người, catch OCE → re-throw).
+  - Sau vòng: `StatusText` tổng kết theo `last` (NoOrder có phân biệt `done>0` / `done==0`; các nhánh lỗi
+    kèm "Đã xử lý {done} đơn; ..."). `return last is NoOrder or Ok || done > 0`.
+- Giữ nguyên `var log = ...` (ghi ActivityLog panel+file). KHÔNG đụng `ProcessFirstOrderAsync`/Core.
+- Xác nhận cấu trúc bao ngoài giữ nguyên: `_navigating = true` đặt TRƯỚC `try` (dòng 211), vòng lặp nằm
+  trọn trong `try` ⇒ cờ bao trùm cả vòng; OCE (từ `ProcessFirstOrderAsync` re-throw và từ `Task.Delay`
+  re-throw) lan tới `catch (OperationCanceledException)` sẵn có; `finally` tắt `_navigating`.
+
+### Kết quả kiểm chứng (số liệu thật)
+- **Baseline TRƯỚC sửa:** `dotnet build ... -p:Deterministic=false` → Build succeeded, 0 Warning / 0 Error.
+  `dotnet test ... --no-build` → **Passed! Failed: 0, Passed: 390, Skipped: 0, Total: 390** (611 ms).
+- **SAU sửa:** `dotnet build ... -p:Deterministic=false` → Build succeeded, **0 Warning / 0 Error**.
+  `dotnet test ... --no-build` → **Passed! Failed: 0, Passed: 390, Skipped: 0, Total: 390** (560 ms).
+- `git status --short` chỉ có `M src/XuLyDonShopee.App/Services/AccountSession.cs` (+ file plan này khi lưu báo cáo).
+- Enum `ArrangeShipmentResult` (Core) đối chiếu: mọi nhánh switch trong plan khớp giá trị thật
+  (Ok, NoOrder, OrdersPageNotOpened, PrepareNotFound, ShipModalNotOpened, ConfirmFailed,
+  DetailModalNotOpened, PrintFailed; `_` bắt `Failed`).
+
+### Vướng mắc / bỏ dở
+- Không có. Bước 1 và Bước 2 (build+test) hoàn tất.
+- **KHÔNG smoke live** (theo yêu cầu — không claim). Tiêu chí nghiệm thu về hành vi trên Brave thật
+  (xử lý lần lượt tới NoOrder, dừng nhanh khi bấm Dừng) cần Fable/người dùng smoke để xác nhận.
+
+### Đề xuất
+- Không có điều chỉnh plan. Đúng như plan ghi: nếu smoke thấy xử lý trùng 1 đơn (list chưa refresh) thì
+  cân nhắc theo-dõi-mã-đơn ở v2.

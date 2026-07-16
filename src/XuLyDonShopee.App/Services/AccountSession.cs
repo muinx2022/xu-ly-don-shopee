@@ -255,25 +255,48 @@ public partial class AccountSession : ObservableObject, IAccountSession
                 return false;
             }
 
-            // Bước 3: xử lý ĐƠN ĐẦU TIÊN (chạy 1 lần) — Chuẩn bị hàng → tự mang ra bưu cục → In phiếu giao.
-            // Mọi bước ghi log qua ActivityLog (panel + file) để smoke live thấy rõ.
+            // Bước 3: xử lý LẦN LƯỢT MỌI đơn — lặp ProcessFirstOrderAsync (mỗi vòng: điều hướng "Tất cả" →
+            // quét đơn đầu có "Chuẩn bị hàng" → arrange → In phiếu → đóng modal) TỚI KHI hết đơn (NoOrder).
+            // Đơn đã arrange MẤT nút "Chuẩn bị hàng" nên vòng tự dừng khi mọi đơn xử lý xong. Mọi bước ghi log
+            // qua ActivityLog (panel + file) để smoke live thấy rõ.
             var log = (Action<string>)(m => _services.Log.Append(_logLabel, m));
-            StatusText = "Đang xử lý đơn đầu tiên...";
-            var r = await s.ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok).ConfigureAwait(false);
-            StatusText = r switch
+            const int MaxOrders = 200;              // chốt chặn an toàn (tránh lặp vô hạn nếu 1 đơn kẹt ở "Chuẩn bị hàng")
+            var loopRng = new Random();
+            int done = 0;
+            ArrangeShipmentResult last = ArrangeShipmentResult.NoOrder;
+            while (done < MaxOrders)
             {
-                ArrangeShipmentResult.Ok => "Đã xử lý 1 đơn (đã bấm In phiếu giao).",
-                ArrangeShipmentResult.NoOrder => "Không còn đơn nào để xử lý.",
-                ArrangeShipmentResult.OrdersPageNotOpened => "Không mở được danh sách đơn (Tất cả).",
-                ArrangeShipmentResult.PrepareNotFound => "Không bấm được Chuẩn bị hàng.",
-                ArrangeShipmentResult.ShipModalNotOpened => "Không mở được ô Giao Đơn Hàng.",
-                ArrangeShipmentResult.ConfirmFailed => "Không bấm được Xác nhận giao đơn.",
-                ArrangeShipmentResult.DetailModalNotOpened => "Không mở được Thông Tin Chi Tiết.",
-                ArrangeShipmentResult.PrintFailed => "Không In phiếu giao được (không bắt được tab phiếu).",
-                _ => "Xử lý đơn gặp lỗi — kiểm tra tay trong Brave.",
+                StatusText = $"Đang xử lý đơn thứ {done + 1}...";
+                last = await s.ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok).ConfigureAwait(false);
+                if (last == ArrangeShipmentResult.NoOrder)
+                {
+                    break;                          // hết đơn cần "Chuẩn bị hàng"
+                }
+                if (last != ArrangeShipmentResult.Ok)
+                {
+                    break;                          // lỗi ở 1 đơn (PrintFailed/ConfirmFailed/...) → dừng, báo bước lỗi
+                }
+                done++;
+                // Dừng ngẫu nhiên kiểu người giữa các đơn.
+                try { await Task.Delay(loopRng.Next(1500, 3500), tok).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+            }
+
+            StatusText = last switch
+            {
+                ArrangeShipmentResult.NoOrder =>
+                    done > 0 ? $"Đã xử lý xong {done} đơn. Không còn đơn nào cần xử lý."
+                             : "Không có đơn nào cần xử lý.",
+                ArrangeShipmentResult.Ok => $"Đã xử lý {done} đơn (đạt chốt chặn {MaxOrders}).", // hiếm khi tới cap
+                ArrangeShipmentResult.OrdersPageNotOpened => $"Đã xử lý {done} đơn; không mở được danh sách đơn.",
+                ArrangeShipmentResult.PrepareNotFound     => $"Đã xử lý {done} đơn; không bấm được Chuẩn bị hàng ở đơn kế.",
+                ArrangeShipmentResult.ShipModalNotOpened  => $"Đã xử lý {done} đơn; không mở được ô Giao Đơn Hàng ở đơn kế.",
+                ArrangeShipmentResult.ConfirmFailed       => $"Đã xử lý {done} đơn; không Xác nhận được ở đơn kế.",
+                ArrangeShipmentResult.DetailModalNotOpened=> $"Đã xử lý {done} đơn; không mở được Thông Tin Chi Tiết ở đơn kế.",
+                ArrangeShipmentResult.PrintFailed         => $"Đã xử lý {done} đơn; không In phiếu giao được ở đơn kế.",
+                _ => $"Đã xử lý {done} đơn; gặp lỗi ở đơn kế — kiểm tra tay trong Brave.",
             };
-            // Coi như xong đợt nếu đã xử lý 1 đơn (Ok) hoặc không còn đơn (NoOrder); ngược lại false.
-            return r is ArrangeShipmentResult.Ok or ArrangeShipmentResult.NoOrder;
+            return last is ArrangeShipmentResult.NoOrder or ArrangeShipmentResult.Ok || done > 0;
         }
         catch (OperationCanceledException)
         {
