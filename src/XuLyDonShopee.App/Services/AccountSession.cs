@@ -296,7 +296,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
             while (done < MaxOrders)
             {
                 StatusText = $"Đang xử lý đơn thứ {done + failCount + 1}...";
-                last = await s.ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok).ConfigureAwait(false);
+                last = await s.ProcessFirstOrderAsync(ShopeeShippingNav.SlipDownloadDir, log, tok).ConfigureAwait(false);
 
                 // Quyết định vòng lặp (hàm thuần, test được): Ok → reset chuỗi lỗi; NoOrder → dừng (hết đơn);
                 // lỗi khác → tăng chuỗi lỗi, dừng khi đạt 3 liên tiếp.

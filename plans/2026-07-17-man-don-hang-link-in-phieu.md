@@ -1,7 +1,7 @@
 # Plan: Màn "Đơn hàng" — thêm link "In phiếu" mở file PDF phiếu đã tải lúc xử lý đơn
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng smoke bấm In phiếu)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
 
 ## 1. Bối cảnh & mục tiêu
@@ -42,4 +42,6 @@ Người dùng yêu cầu: thêm **link "In phiếu"** ở mỗi dòng bảng Đ
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus (worktree) tách hằng `ShopeeShippingNav.SlipDownloadDir`; `OrderRowViewModel` thêm `SlipPath` (= hằng + SanitizeFileName(order_sn) + ".pdf", KHỚP nơi tải phiếu) + `[RelayCommand] OpenSlip` (File.Exists lúc bấm → thiếu thì notify; có thì Process.Start ShellExecute bọc try/catch); OrdersViewModel truyền callback set StatusMessage; OrdersView thêm cột "Phiếu" nút link "In phiếu". Test SlipPath (3 ca sanitize) + OpenSlip-thiếu-file. Executor gặp mâu thuẫn plan-vs-cấm-đụng (call site dùng hằng nằm ở AccountSession.cs — lúc đó bị việc khác giữ) → đúng đắn giữ literal, dùng hằng cùng giá trị ở màn Đơn hàng, đề xuất Fable đồng bộ sau.
+
+Nghiệm thu (Fable): đọc SlipPath/OpenSlip xác nhận dùng chung hằng + hàm sanitize (đường dẫn khớp nơi tải phiếu — `ls D:\Phieu-giao-hang` xác nhận file .pdf đúng tên mã đơn); build 0 warning + 462/462 (worktree). Merge → master; sau merge Fable đồng bộ nốt AccountSession.cs call site dùng `ShopeeShippingNav.SlipDownloadDir` (1 dòng, cùng giá trị, không đổi hành vi) → build tổng 472/472. Ghi nhận UX nhỏ (StatusMessage màu xanh cho cả thông báo lỗi) — để dành lần chỉnh UI sau. Smoke: CHỜ NGƯỜI DÙNG bấm In phiếu.
