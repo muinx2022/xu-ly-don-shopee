@@ -252,7 +252,11 @@ public partial class AccountSession : ObservableObject, IAccountSession
             };
             if (pick != SetPickupResult.Ok)
             {
-                return false;
+                // KHÔNG dừng cả luồng: Shopee có thể CHẶN đổi địa chỉ lấy hàng khi shop có đơn "Chờ lấy
+                // hàng" (đã arrange, chờ bưu cục) → bước đặt địa chỉ thất bại KHÔNG được chặn việc xử lý đơn.
+                // Địa chỉ giữ nguyên hiện tại; vẫn chạy tiếp vòng xử lý đơn bên dưới.
+                _services.Log.Append(_logLabel,
+                    $"Không đặt được địa chỉ lấy hàng ({province}) — có thể do có đơn Chờ lấy hàng khóa đổi địa chỉ; vẫn tiếp tục xử lý đơn.");
             }
 
             // Bước 3: xử lý LẦN LƯỢT MỌI đơn — lặp ProcessFirstOrderAsync (mỗi vòng: điều hướng "Tất cả" →
