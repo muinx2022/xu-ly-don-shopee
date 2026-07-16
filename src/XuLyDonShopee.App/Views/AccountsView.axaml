@@ -78,6 +78,17 @@
             <Setter Property="Background" Value="{StaticResource NavActiveBg}" />
         </Style>
 
+        <!-- Tên tài khoản trong lưới: thường xám đậm; khi phiên ĐANG MỞ (IsRunning) → xanh + SemiBold.
+             Đặt màu/đậm trong style (không inline) để class .running mới override được (inline = LocalValue thắng mọi style). -->
+        <Style Selector="TextBlock.acctName">
+            <Setter Property="Foreground" Value="{StaticResource Text232}" />
+            <Setter Property="FontWeight" Value="Medium" />
+        </Style>
+        <Style Selector="TextBlock.acctName.running">
+            <Setter Property="Foreground" Value="#2E7D32" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
         <!-- Nút "Xóa" trên nền đen của panel nhật ký (tối màu cho hợp tông). -->
         <Style Selector="Button.logClear">
             <Setter Property="Height" Value="24" />
@@ -170,17 +181,23 @@
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListBox.ItemTemplate>
                             <DataTemplate x:DataType="vm:AccountRowViewModel">
-                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                <Grid ColumnDefinitions="Auto,Auto,*,Auto">
                                     <!-- Tick chọn nhiều. CheckBox tự nuốt click nên KHÔNG đổi lựa chọn dòng
                                          (bấm vùng khác của dòng mới chọn dòng). -->
                                     <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0"
                                               IsChecked="{Binding IsSelected}" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Email}" FontSize="13"
-                                               FontWeight="Medium" VerticalAlignment="Center"
-                                               Foreground="{StaticResource Text232}"
-                                               TextTrimming="CharacterEllipsis" />
+                                    <!-- Mũi tên "đang mở cửa sổ" ngay TRƯỚC tên (ẩn khi không chạy → không chiếm chỗ). -->
+                                    <TextBlock Grid.Column="1" Text="►" FontSize="10" Foreground="#2E7D32"
+                                               VerticalAlignment="Center" Margin="0,0,4,0"
+                                               IsVisible="{Binding IsRunning}" />
+                                    <!-- Tên shop: thường Text232/Medium; khi phiên ĐANG MỞ → xanh + SemiBold (class .running).
+                                         Màu/đậm đặt ở style (không inline) để class .running override được. -->
+                                    <TextBlock Grid.Column="2" Classes="acctName" Text="{Binding Email}"
+                                               FontSize="13" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               Classes.running="{Binding IsRunning}" />
                                     <!-- Khối phải: chấm trạng thái + (khi đang chạy) chấm xanh & "Chờ lấy: N". -->
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6"
                                                 VerticalAlignment="Center" Margin="8,0,0,0">
                                         <Border Width="6" Height="6" CornerRadius="3"
                                                 VerticalAlignment="Center"
