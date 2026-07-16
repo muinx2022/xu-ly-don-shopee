@@ -1,7 +1,7 @@
 # Plan: Sau khi xử lý hết đơn, đặt địa chỉ lấy hàng về MỘT ĐỊA CHỈ KHÁC
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng smoke — lưu ý Shopee có thể khóa đổi địa chỉ khi có đơn Chờ lấy hàng)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -86,4 +86,6 @@ Hiện trạng code liên quan (đã khảo sát):
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus thực thi đủ A/B: tách khối "mở Sửa → tick → Lưu" thành `OpenEditAndSetItemAsPickupAsync` (tự kiểm chứng DI CHUYỂN NGUYÊN VĂN bằng diff từng byte với bản HEAD); method mới `SetPickupAddressToOtherAsync` (interface + hiện thực) chọn item ĐẦU TIÊN chắc chắn không mang tag qua `FindFirstNonPickupAddressItemAsync` + `TryReadItemHasPickupTagAsync` trả bool? (đọc lỗi → bỏ qua item, không chọn bừa); bước 4 trong `ProcessOrdersAsync` chỉ chạy khi vòng kết thúc tự nhiên (NoOrder/cap), best-effort, ghép StatusText sau summary, không đổi giá trị trả về; OCE ném xuyên ở method mới (có chủ đích theo plan; `SetPickupAddressAsync` cũ giữ nguyên hành vi nuốt). 5 điểm làm khác plan đều trong khuôn khổ, đã duyệt.
+
+Nghiệm thu (Fable): tự build 0 warning + 400/400 test xanh; panel rà soát đối kháng 2/3 phiếu — 0 finding được giữ (3 phát hiện thô đều bị bác); Fable vá phòng thủ thêm 1 dòng: catch bước 4 trả StatusText về summary kẻo kẹt ở câu "Đang đặt lại...". Smoke thật: CHỜ NGƯỜI DÙNG — chạy "Xử lý đơn" tới hết đơn, kiểm log bước 4 và địa chỉ trên Shopee; gặp "Chưa đặt lại được..." ngay sau lượt arrange là giới hạn phía Shopee (khóa đổi khi có đơn Chờ lấy hàng), không phải lỗi code.

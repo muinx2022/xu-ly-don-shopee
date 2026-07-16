@@ -184,8 +184,11 @@ public partial class AccountSession : ObservableObject, IAccountSession
     /// (<see cref="AccountsViewModel.DefaultPickupAddress"/> nếu chưa chọn) (bước 2), rồi <b>xử lý LẦN LƯỢT
     /// MỌI đơn</b> cần "Chuẩn bị hàng" (bước 3): lặp <c>ProcessFirstOrderAsync</c> (arrange → CHỜ nút In phiếu
     /// giao tới 5' → lưu phiếu → đóng modal) TỚI KHI hết đơn. ĐƠN LỖI thì ghi log + <b>BỎ QUA, chạy tiếp đơn
-    /// kế</b>; chỉ dừng khi lỗi 3 đơn LIÊN TIẾP (chống lặp vô hạn) hoặc chạm chốt chặn 200 đơn. Bật cờ
-    /// <see cref="_navigating"/> bao trùm cả 3 bước để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn
+    /// kế</b>; chỉ dừng khi lỗi 3 đơn LIÊN TIẾP (chống lặp vô hạn) hoặc chạm chốt chặn 200 đơn. Khi vòng kết
+    /// thúc TỰ NHIÊN (hết đơn / chạm chốt chặn), quay lại Cài đặt vận chuyển và <b>đặt lại địa chỉ lấy hàng
+    /// về MỘT ĐỊA CHỈ KHÁC</b> (bước 4, best-effort — chỉ ghi log/StatusText, KHÔNG đổi giá trị trả về; nếu
+    /// vòng dừng GIỮA CHỪNG vì 3 lỗi liên tiếp thì GIỮ NGUYÊN địa chỉ vì việc còn dở). Bật cờ
+    /// <see cref="_navigating"/> bao trùm cả 4 bước để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn
     /// giữa chừng (phá thao tác). Graceful: phiên chưa chạy / bị hủy / lỗi → false, KHÔNG ném.
     /// </summary>
     public async Task<bool> ProcessOrdersAsync()
@@ -336,6 +339,56 @@ public partial class AccountSession : ObservableObject, IAccountSession
             }
             StatusText = summary;
             log(summary);
+
+            // Bước 4: sau khi vòng xử lý kết thúc TỰ NHIÊN (hết đơn NoOrder / chạm chốt chặn Ok), quay lại Cài
+            // đặt vận chuyển và đặt địa chỉ lấy hàng về MỘT ĐỊA CHỈ KHÁC — KHÔNG giữ nguyên địa chỉ app đã đặt
+            // để xử lý. Best-effort: mọi kết cục CHỈ ghi log + StatusText (ghép SAU summary cho khỏi mất tổng
+            // kết), KHÔNG đổi giá trị return. Nếu vòng dừng GIỮA CHỪNG vì 3 lỗi liên tiếp → GIỮ NGUYÊN địa chỉ
+            // (việc còn dở, người dùng sẽ chạy lại). OCE ném xuyên để catch ngoài cùng dừng sạch.
+            if (last is ArrangeShipmentResult.NoOrder or ArrangeShipmentResult.Ok)
+            {
+                try
+                {
+                    StatusText = "Đang đặt lại địa chỉ lấy hàng (địa chỉ khác)...";
+                    log("Quay lại Cài đặt vận chuyển để đặt địa chỉ lấy hàng về địa chỉ khác...");
+                    var nav2 = await s.OpenShippingAddressSettingsAsync(tok).ConfigureAwait(false);
+                    if (nav2 != ShippingNavResult.Ok)
+                    {
+                        StatusText = summary + " Không mở lại được Cài đặt vận chuyển — giữ nguyên địa chỉ lấy hàng.";
+                        log("Không mở lại được Cài đặt vận chuyển — giữ nguyên địa chỉ lấy hàng.");
+                    }
+                    else
+                    {
+                        var other = await s.SetPickupAddressToOtherAsync(tok).ConfigureAwait(false);
+                        string msg = other switch
+                        {
+                            SetPickupResult.Ok => "Đã đặt địa chỉ lấy hàng về địa chỉ khác.",
+                            SetPickupResult.AddressNotFound =>
+                                "Shop không có địa chỉ nào khác — giữ nguyên địa chỉ lấy hàng.",
+                            _ =>
+                                $"Chưa đặt lại được địa chỉ lấy hàng ({DescribeSetPickupStep(other)}) — Shopee có thể khóa đổi địa chỉ khi có đơn Chờ lấy hàng; kiểm tra tay nếu cần.",
+                        };
+                        StatusText = summary + " " + msg;
+                        log(msg);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // hủy chủ động → để catch OCE ngoài cùng dừng sạch
+                }
+                catch (Exception ex)
+                {
+                    // Best-effort: lỗi bất ngờ khi đặt lại địa chỉ KHÔNG được phá kết quả vòng xử lý.
+                    // Trả StatusText về câu tổng kết (kẻo kẹt ở "Đang đặt lại địa chỉ...").
+                    StatusText = summary + " (Lỗi khi đặt lại địa chỉ lấy hàng — xem nhật ký.)";
+                    log($"Lỗi khi đặt lại địa chỉ lấy hàng (bỏ qua): {ex.Message}");
+                }
+            }
+            else
+            {
+                log("Giữ nguyên địa chỉ lấy hàng (vòng dừng giữa chừng).");
+            }
+
             return last is ArrangeShipmentResult.NoOrder or ArrangeShipmentResult.Ok || done > 0;
         }
         catch (OperationCanceledException)
@@ -385,6 +438,16 @@ public partial class AccountSession : ObservableObject, IAccountSession
         ArrangeShipmentResult.ConfirmFailed        => "không Xác nhận được",
         ArrangeShipmentResult.DetailModalNotOpened => "không mở được Thông Tin Chi Tiết",
         ArrangeShipmentResult.PrintFailed          => "không In phiếu giao được",
+        _ => "lỗi không xác định",
+    };
+
+    /// <summary>Mô tả NGẮN bước hỏng khi đặt LẠI địa chỉ lấy hàng về địa chỉ khác (bước 4, cho log/StatusText).</summary>
+    private static string DescribeSetPickupStep(SetPickupResult r) => r switch
+    {
+        SetPickupResult.EditModalNotOpened  => "không mở được ô Sửa địa chỉ",
+        SetPickupResult.CheckboxNotFound    => "không thấy mục Đặt làm địa chỉ lấy hàng",
+        SetPickupResult.CheckboxClickFailed => "không tick được",
+        SetPickupResult.SaveFailed          => "không Lưu được",
         _ => "lỗi không xác định",
     };
 

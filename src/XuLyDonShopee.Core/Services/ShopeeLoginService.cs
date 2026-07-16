@@ -117,6 +117,24 @@ public interface ILoginSession : IAsyncDisposable
     Task<SetPickupResult> SetPickupAddressAsync(string province, CancellationToken ct = default);
 
     /// <summary>
+    /// <b>Bước 4 xử lý đơn — đặt "địa chỉ lấy hàng" về MỘT ĐỊA CHỈ KHÁC:</b> chạy khi ĐANG ở tab "Địa Chỉ"
+    /// (caller mở sẵn, giống hợp đồng <see cref="SetPickupAddressAsync"/>). Chọn <b>địa chỉ ĐẦU TIÊN KHÔNG
+    /// mang tag "Địa chỉ lấy hàng"</b> rồi bấm <b>Sửa</b> → tick "Đặt làm địa chỉ lấy hàng" → <b>Lưu</b>
+    /// (dùng chung khối với <see cref="SetPickupAddressAsync"/>). Dùng SAU khi đã xử lý hết đơn để KHÔNG giữ
+    /// nguyên địa chỉ mà app đã đặt lúc xử lý. "Địa chỉ khác" = item đầu tiên đọc được DOM và chắc chắn KHÔNG
+    /// có tag pickup; item đọc tag LỖI (DOM chưa render) bị BỎ QUA để tránh chọn bừa; nếu tag không đọc được
+    /// đúng lúc chọn (DOM đổi) vẫn có thể trúng chính địa chỉ đang là pickup — <b>vô hại</b> (tick lại chính
+    /// nó, Shopee giữ nguyên).
+    /// <para>
+    /// <b>Graceful:</b> mọi lỗi → một giá trị <see cref="SetPickupResult"/> (bộ kết quả phân biệt bước hỏng
+    /// như <see cref="SetPickupAddressAsync"/>); shop chỉ có 1 địa chỉ / mọi địa chỉ đang là pickup →
+    /// <see cref="SetPickupResult.AddressNotFound"/>. Riêng <see cref="OperationCanceledException"/> ném XUYÊN
+    /// để caller dừng sạch.
+    /// </para>
+    /// </summary>
+    Task<SetPickupResult> SetPickupAddressToOtherAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// <b>Bước 3 xử lý đơn — xử lý ĐƠN ĐẦU TIÊN trong danh sách "Tất cả" (tab "Chờ xử lý"):</b> điều hướng
     /// về trang danh sách đơn (<c>/portal/sale/order</c>), lấy đơn đầu tiên → bấm <b>"Chuẩn bị hàng"</b> →
     /// trong modal <b>"Giao Đơn Hàng"</b> chọn <b>"Tôi sẽ tự mang hàng tới Bưu cục"</b> (mặc định đã chọn)
@@ -1435,121 +1453,246 @@ public class ShopeeLoginService
                     return SetPickupResult.Ok;
                 }
 
-                // 3) Tìm & bấm nút "Sửa" của địa chỉ đó (chỉ click khi có bounding box). Không thấy nút /
-                //    click không ăn → coi như không mở được modal sửa.
-                var editBtn = await FindEditButtonAsync(item).ConfigureAwait(false);
-                if (editBtn is null)
-                {
-                    return SetPickupResult.EditModalNotOpened;
-                }
-
-                bool clicked;
-                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, editBtn, mx, my, rng, ct).ConfigureAwait(false);
-                if (!clicked)
-                {
-                    return SetPickupResult.EditModalNotOpened;
-                }
-
-                // 4) Chờ modal "Sửa Địa chỉ" mở (shop bị khóa sửa → không mở). Dừng "đọc modal".
-                var modal = await WaitEditAddressModalAsync(page, 10000, ct).ConfigureAwait(false);
-                if (modal is null)
-                {
-                    return SetPickupResult.EditModalNotOpened;
-                }
-                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
-
-                // 5) Thao tác checkbox "Đặt làm địa chỉ lấy hàng". Modal chứa Google Map load bất đồng bộ
-                //    → Vue vẽ lại form nên checkbox re-query TƯƠI trước mỗi lần dùng, trạng thái tick đọc
-                //    bằng DOM sống (KHÔNG giữ handle qua re-render). Bọc try/finally: kết quả KHÁC Ok mà
-                //    modal còn mở → LUÔN Hủy (chốt chặn cuối, kể cả khi có exception rơi lên catch ngoài).
-                var result = SetPickupResult.Failed;
-                try
-                {
-                    // 5a) Chờ ổn định: thấy label checkbox HAI LẦN LIÊN TIẾP (~400ms) để map/form re-render
-                    //     xong mới thao tác; deadline ~8s. Không thấy → không có ô cần tick.
-                    if (!await WaitPickupCheckboxStableAsync(modal, 8000, ct).ConfigureAwait(false))
-                    {
-                        result = SetPickupResult.CheckboxNotFound;
-                        return result;
-                    }
-
-                    // 5b) Đã tick sẵn (đọc DOM sống) → trạng thái mong muốn đã có → Hủy (không đổi gì), Ok.
-                    if (await IsPickupCheckedAsync(modal).ConfigureAwait(false) == true)
-                    {
-                        (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
-                        result = SetPickupResult.Ok;
-                        return result;
-                    }
-
-                    // 5c) Vòng tick tối đa 3 lần: re-query text span TƯƠI → click kiểu người CÓ HIT-TEST →
-                    //     chờ → đọc lại trạng thái bằng DOM sống. true → thoát vòng thành công.
-                    bool ticked = false;
-                    for (int attempt = 0; attempt < 3 && !ticked; attempt++)
-                    {
-                        var span = await FindPickupClickTargetAsync(modal).ConfigureAwait(false);
-                        if (span is not null)
-                        {
-                            (mx, my, _) = await TryHumanClickVisibleAsync(page, span, mx, my, rng, ct).ConfigureAwait(false);
-                        }
-                        await Task.Delay(rng.Next(300, 900), ct).ConfigureAwait(false);
-                        if (await IsPickupCheckedAsync(modal).ConfigureAwait(false) == true)
-                        {
-                            ticked = true;
-                        }
-                    }
-
-                    if (!ticked)
-                    {
-                        result = SetPickupResult.CheckboxClickFailed;
-                        return result;
-                    }
-
-                    // 6) Bấm "Lưu" (GHI lên shop thật). Không tìm / không click được → SaveFailed.
-                    var saveBtn = await FindSaveButtonAsync(modal).ConfigureAwait(false);
-                    if (saveBtn is null)
-                    {
-                        result = SetPickupResult.SaveFailed;
-                        return result;
-                    }
-
-                    (mx, my, clicked) = await TryHumanClickVisibleAsync(page, saveBtn, mx, my, rng, ct).ConfigureAwait(false);
-                    if (!clicked)
-                    {
-                        result = SetPickupResult.SaveFailed;
-                        return result;
-                    }
-
-                    // 7) Chờ Lưu hoàn tất. Sau khi Lưu, Shopee CÓ THỂ (không chắc) bật thêm hộp xác nhận đổi
-                    //    địa chỉ lấy hàng — nếu có thì bấm "Đồng ý" kiểu người rồi chờ modal Sửa đóng.
-                    //    Hoàn tất → Ok; hết giờ (lỗi form/shop khóa / chưa chốt được) → SaveFailed.
-                    result = await WaitPickupSaveCompletedAsync(page, 15000, mx, my, rng, ct).ConfigureAwait(false)
-                        ? SetPickupResult.Ok
-                        : SetPickupResult.SaveFailed;
-                    return result;
-                }
-                finally
-                {
-                    // Chốt chặn: mọi nhánh thất bại (kể cả exception) mà modal còn mở → Hủy, KHÔNG để modal
-                    // "Sửa Địa chỉ" mở treo. Re-find modal TƯƠI (handle cũ có thể đã stale). Best-effort.
-                    if (result != SetPickupResult.Ok)
-                    {
-                        try
-                        {
-                            var openModal = await FindEditAddressModalAsync(page).ConfigureAwait(false);
-                            if (openModal is not null)
-                            {
-                                await HumanCancelModalAsync(page, openModal, mx, my, rng, ct).ConfigureAwait(false);
-                            }
-                        }
-                        catch { /* best-effort — nuốt lỗi (context ngắt / hủy) */ }
-                    }
-                }
+                // 3) Địa chỉ khớp tỉnh CHƯA là địa chỉ lấy hàng → mở "Sửa" → tick → "Lưu" (khối dùng chung
+                //    với SetPickupAddressToOtherAsync; KHÔNG phụ thuộc tỉnh nên tách ra tái dùng).
+                return await OpenEditAndSetItemAsPickupAsync(page, item, mx, my, rng, ct).ConfigureAwait(false);
             }
             catch
             {
                 // Bất kỳ lỗi nào (selector đổi, context ngắt, hủy...) → Failed, KHÔNG phá phiên. Modal (nếu
                 // còn mở) đã được finally trên Hủy trước khi exception rơi tới đây.
                 return SetPickupResult.Failed;
+            }
+        }
+
+        /// <summary>
+        /// <b>Khối dùng chung "mở Sửa → tick → Lưu"</b> cho một địa chỉ <paramref name="item"/> đã xác định
+        /// (KHÔNG phụ thuộc tỉnh). Tách NGUYÊN VĂN từ <see cref="SetPickupAddressAsync"/> để
+        /// <see cref="SetPickupAddressToOtherAsync"/> tái dùng: bấm "Sửa" → chờ modal → tick "Đặt làm địa chỉ
+        /// lấy hàng" (re-query TƯƠI, đọc DOM sống vì modal có Google Map load ngầm) → "Lưu" → chờ hoàn tất; mọi
+        /// nhánh thất bại (kể cả exception) đều Hủy modal (finally). <b>KHÔNG bọc try/catch ngoài cùng</b> —
+        /// exception rò lên caller (giữ đúng hành vi khi khối này còn nằm trong SetPickupAddressAsync).
+        /// </summary>
+        private async Task<SetPickupResult> OpenEditAndSetItemAsPickupAsync(
+            IPage page, IElementHandle item, double mx, double my, Random rng, CancellationToken ct)
+        {
+            // 3) Tìm & bấm nút "Sửa" của địa chỉ đó (chỉ click khi có bounding box). Không thấy nút /
+            //    click không ăn → coi như không mở được modal sửa.
+            var editBtn = await FindEditButtonAsync(item).ConfigureAwait(false);
+            if (editBtn is null)
+            {
+                return SetPickupResult.EditModalNotOpened;
+            }
+
+            bool clicked;
+            (mx, my, clicked) = await TryHumanClickVisibleAsync(page, editBtn, mx, my, rng, ct).ConfigureAwait(false);
+            if (!clicked)
+            {
+                return SetPickupResult.EditModalNotOpened;
+            }
+
+            // 4) Chờ modal "Sửa Địa chỉ" mở (shop bị khóa sửa → không mở). Dừng "đọc modal".
+            var modal = await WaitEditAddressModalAsync(page, 10000, ct).ConfigureAwait(false);
+            if (modal is null)
+            {
+                return SetPickupResult.EditModalNotOpened;
+            }
+            await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+            // 5) Thao tác checkbox "Đặt làm địa chỉ lấy hàng". Modal chứa Google Map load bất đồng bộ
+            //    → Vue vẽ lại form nên checkbox re-query TƯƠI trước mỗi lần dùng, trạng thái tick đọc
+            //    bằng DOM sống (KHÔNG giữ handle qua re-render). Bọc try/finally: kết quả KHÁC Ok mà
+            //    modal còn mở → LUÔN Hủy (chốt chặn cuối, kể cả khi có exception rơi lên catch ngoài).
+            var result = SetPickupResult.Failed;
+            try
+            {
+                // 5a) Chờ ổn định: thấy label checkbox HAI LẦN LIÊN TIẾP (~400ms) để map/form re-render
+                //     xong mới thao tác; deadline ~8s. Không thấy → không có ô cần tick.
+                if (!await WaitPickupCheckboxStableAsync(modal, 8000, ct).ConfigureAwait(false))
+                {
+                    result = SetPickupResult.CheckboxNotFound;
+                    return result;
+                }
+
+                // 5b) Đã tick sẵn (đọc DOM sống) → trạng thái mong muốn đã có → Hủy (không đổi gì), Ok.
+                if (await IsPickupCheckedAsync(modal).ConfigureAwait(false) == true)
+                {
+                    (mx, my) = await HumanCancelModalAsync(page, modal, mx, my, rng, ct).ConfigureAwait(false);
+                    result = SetPickupResult.Ok;
+                    return result;
+                }
+
+                // 5c) Vòng tick tối đa 3 lần: re-query text span TƯƠI → click kiểu người CÓ HIT-TEST →
+                //     chờ → đọc lại trạng thái bằng DOM sống. true → thoát vòng thành công.
+                bool ticked = false;
+                for (int attempt = 0; attempt < 3 && !ticked; attempt++)
+                {
+                    var span = await FindPickupClickTargetAsync(modal).ConfigureAwait(false);
+                    if (span is not null)
+                    {
+                        (mx, my, _) = await TryHumanClickVisibleAsync(page, span, mx, my, rng, ct).ConfigureAwait(false);
+                    }
+                    await Task.Delay(rng.Next(300, 900), ct).ConfigureAwait(false);
+                    if (await IsPickupCheckedAsync(modal).ConfigureAwait(false) == true)
+                    {
+                        ticked = true;
+                    }
+                }
+
+                if (!ticked)
+                {
+                    result = SetPickupResult.CheckboxClickFailed;
+                    return result;
+                }
+
+                // 6) Bấm "Lưu" (GHI lên shop thật). Không tìm / không click được → SaveFailed.
+                var saveBtn = await FindSaveButtonAsync(modal).ConfigureAwait(false);
+                if (saveBtn is null)
+                {
+                    result = SetPickupResult.SaveFailed;
+                    return result;
+                }
+
+                (mx, my, clicked) = await TryHumanClickVisibleAsync(page, saveBtn, mx, my, rng, ct).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    result = SetPickupResult.SaveFailed;
+                    return result;
+                }
+
+                // 7) Chờ Lưu hoàn tất. Sau khi Lưu, Shopee CÓ THỂ (không chắc) bật thêm hộp xác nhận đổi
+                //    địa chỉ lấy hàng — nếu có thì bấm "Đồng ý" kiểu người rồi chờ modal Sửa đóng.
+                //    Hoàn tất → Ok; hết giờ (lỗi form/shop khóa / chưa chốt được) → SaveFailed.
+                result = await WaitPickupSaveCompletedAsync(page, 15000, mx, my, rng, ct).ConfigureAwait(false)
+                    ? SetPickupResult.Ok
+                    : SetPickupResult.SaveFailed;
+                return result;
+            }
+            finally
+            {
+                // Chốt chặn: mọi nhánh thất bại (kể cả exception) mà modal còn mở → Hủy, KHÔNG để modal
+                // "Sửa Địa chỉ" mở treo. Re-find modal TƯƠI (handle cũ có thể đã stale). Best-effort.
+                if (result != SetPickupResult.Ok)
+                {
+                    try
+                    {
+                        var openModal = await FindEditAddressModalAsync(page).ConfigureAwait(false);
+                        if (openModal is not null)
+                        {
+                            await HumanCancelModalAsync(page, openModal, mx, my, rng, ct).ConfigureAwait(false);
+                        }
+                    }
+                    catch { /* best-effort — nuốt lỗi (context ngắt / hủy) */ }
+                }
+            }
+        }
+
+        // ===== Bước 4: sau khi xử lý hết đơn, đặt "địa chỉ lấy hàng" về MỘT ĐỊA CHỈ KHÁC (KIỂU NGƯỜI) =====
+
+        public async Task<SetPickupResult> SetPickupAddressToOtherAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    return SetPickupResult.Failed;
+                }
+
+                // Random nội bộ + con trỏ bắt đầu ở vị trí ngẫu nhiên (đồng bộ style các thao tác kiểu người).
+                var rng = new Random();
+                var vp = page.ViewportSize;
+                double vw = vp is not null ? vp.Width : 1280;
+                double vh = vp is not null ? vp.Height : 720;
+                double mx = rng.NextDouble() * vw;
+                double my = rng.NextDouble() * vh;
+
+                // Dừng "đọc trang" trước khi bắt đầu.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 1) Chờ danh sách địa chỉ & tìm địa chỉ ĐẦU TIÊN chắc chắn KHÔNG mang tag "Địa chỉ lấy hàng".
+                var item = await FindFirstNonPickupAddressItemAsync(page, 15000, ct).ConfigureAwait(false);
+                if (item is null)
+                {
+                    // Danh sách rỗng / shop chỉ có 1 địa chỉ / mọi địa chỉ đang là pickup → không có "địa chỉ khác".
+                    return SetPickupResult.AddressNotFound;
+                }
+
+                // 2) Mở "Sửa" → tick → "Lưu" (khối dùng chung với SetPickupAddressAsync).
+                return await OpenEditAndSetItemAsPickupAsync(page, item, mx, my, rng, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // hủy chủ động → ném XUYÊN để caller (ProcessOrdersAsync) dừng sạch
+            }
+            catch
+            {
+                // Bất kỳ lỗi nào khác (selector đổi, context ngắt...) → Failed, KHÔNG phá phiên. Modal (nếu còn
+                // mở) đã được finally trong OpenEditAndSetItemAsPickupAsync Hủy trước khi exception rơi tới đây.
+                return SetPickupResult.Failed;
+            }
+        }
+
+        /// <summary>
+        /// Dò địa chỉ (<c>.address-list .address-item-container</c>) ĐẦU TIÊN chắc chắn KHÔNG mang tag "Địa
+        /// chỉ lấy hàng" (dùng cho "đặt về địa chỉ khác"), poll tới khi hết <paramref name="timeoutMs"/>
+        /// (danh sách render dần), re-query TƯƠI mỗi lượt. Item đọc tag LỖI (<c>null</c>) bị BỎ QUA — thận
+        /// trọng, tránh chọn bừa lúc DOM chưa render. Không có item không-tag (shop 1 địa chỉ / mọi địa chỉ
+        /// đang là pickup) → <c>null</c> (không ném).
+        /// </summary>
+        private static async Task<IElementHandle?> FindFirstNonPickupAddressItemAsync(
+            IPage page, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var items = await page.QuerySelectorAllAsync(".address-list .address-item-container")
+                        .ConfigureAwait(false);
+                    foreach (var it in items)
+                    {
+                        // CHỈ chọn khi đọc tag KHÔNG ném VÀ chắc chắn không có tag (== false). null (đọc lỗi)
+                        // hoặc true (đang là pickup) → BỎ QUA.
+                        if (await TryReadItemHasPickupTagAsync(it).ConfigureAwait(false) == false)
+                        {
+                            return it; // địa chỉ KHÔNG mang tag ĐẦU TIÊN theo thứ tự trang
+                        }
+                    }
+                }
+                catch { /* chưa render / selector không hợp lệ — thử vòng sau */ }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return null;
+        }
+
+        /// <summary>
+        /// Đọc tag "Địa chỉ lấy hàng" của một địa chỉ, PHÂN BIỆT lỗi đọc (khác <see cref="ItemHasPickupTagAsync"/>
+        /// vốn nuốt lỗi thành <c>false</c>): <c>true</c> = chắc chắn CÓ tag; <c>false</c> = đọc được DOM và chắc
+        /// chắn KHÔNG có tag; <c>null</c> = đọc lỗi/ném (DOM chưa render / handle stale) → caller KHÔNG được coi
+        /// là "không tag".
+        /// </summary>
+        private static async Task<bool?> TryReadItemHasPickupTagAsync(IElementHandle item)
+        {
+            try
+            {
+                var tags = await item.QuerySelectorAllAsync(".address-label").ConfigureAwait(false);
+                foreach (var tag in tags)
+                {
+                    if (ShopeeShippingNav.IsPickupTagText(await tag.InnerTextAsync().ConfigureAwait(false)))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            catch
+            {
+                return null; // đọc lỗi — KHÔNG kết luận "không tag"
             }
         }
 
