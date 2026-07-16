@@ -45,6 +45,8 @@ public class AccountRowViewModelTests
         public Task<bool> ProcessOrdersAsync() => Task.FromResult(false);
 
         public Task<bool> CheckOrdersAsync() => Task.FromResult(false);
+
+        public Task<bool> SyncOrdersAsync() => Task.FromResult(false);
     }
 
     private static AccountRowViewModel NewRow()

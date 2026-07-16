@@ -14,6 +14,9 @@ public class AppServices
     public ProxyRepository Proxies { get; }
     public SettingsRepository Settings { get; }
 
+    /// <summary>Kho đơn hàng đã sync (bảng <c>orders</c>) — phiên ghi qua đây khi Sync Đơn hàng.</summary>
+    public OrdersRepository Orders { get; }
+
     /// <summary>Nhật ký hoạt động của app (panel UI + ghi file cạnh database). Các phiên nạp log qua đây.</summary>
     public ActivityLog Log { get; }
 
@@ -27,6 +30,7 @@ public class AppServices
         Accounts = new AccountRepository(Database);
         Proxies = new ProxyRepository(Database);
         Settings = new SettingsRepository(Database);
+        Orders = new OrdersRepository(Database);
         // Log đặt TRƯỚC Sessions vì các phiên sẽ nạp log qua Log khi chạy. Thư mục logs cạnh file database.
         var logDir = Path.Combine(Path.GetDirectoryName(Database.Path) ?? ".", "logs");
         Directory.CreateDirectory(logDir);

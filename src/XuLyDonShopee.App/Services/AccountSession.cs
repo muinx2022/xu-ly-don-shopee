@@ -518,6 +518,72 @@ public partial class AccountSession : ObservableObject, IAccountSession
     }
 
     /// <summary>
+    /// Sync Đơn hàng: trong phiên đang chạy, vào Quản lý đơn hàng → tab "Tất cả", duyệt MỌI trang danh sách
+    /// (Core best-effort — không ném trừ hủy) thu thập thông tin đơn rồi <b>UPSERT về DB</b> (bảng orders,
+    /// theo khóa <c>(account_id, order_sn)</c>). Bật cờ <see cref="_navigating"/> suốt lượt để loại trừ với
+    /// Xử lý đơn / Kiểm tra / nhịp theo dõi 30' (không hai luồng chuột trên cùng trang). Ghi log tiến trình
+    /// từng trang + tổng kết (thêm mới / cập nhật). Graceful: phiên chưa chạy / đang bận / bị hủy / lỗi →
+    /// false + StatusText/log, KHÔNG ném. finally reset <see cref="_navigating"/>.
+    /// </summary>
+    public async Task<bool> SyncOrdersAsync()
+    {
+        // Chụp phiên + token dưới lock (nuốt ObjectDisposedException nếu _cts đã dispose).
+        var s = _session;
+        CancellationToken tok;
+        try
+        {
+            lock (_lifecycleLock)
+            {
+                tok = _cts?.Token ?? default;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
+        // _navigating: đang có lượt điều hướng chạy dở (bấm lặp / xử lý đơn / kiểm tra) → bỏ qua, không chồng nhau.
+        if (s is null || State != SessionState.Running || _navigating)
+        {
+            return false;
+        }
+
+        _navigating = true;
+        StatusText = "Đang sync đơn hàng (tab Tất cả)...";
+        var log = (Action<string>)(m => _services.Log.Append(_logLabel, m));
+        try
+        {
+            // Core thu thập (best-effort có log tiến trình từng trang), trả DTO — KHÔNG đụng DB.
+            var result = await s.SyncAllOrdersAsync(log, tok).ConfigureAwait(false);
+
+            // Lưu về DB (thread nền — SQLite an toàn): upsert theo (account_id, order_sn).
+            var (inserted, updated) = _services.Orders.UpsertMany(_accountId, result.Orders, DateTime.UtcNow);
+
+            var summary = $"Sync xong: {result.Orders.Count} đơn / {result.Pages} trang — thêm {inserted} mới, cập nhật {updated}."
+                + (result.ReachedPageCap ? " (chạm chốt chặn 20 trang)" : string.Empty);
+            StatusText = summary;
+            log(summary);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // Bị dừng chủ động trong lúc sync — không phải lỗi.
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Lỗi bất ngờ (vd ghi DB) → log + StatusText, KHÔNG ném (không phá phiên).
+            StatusText = "Sync đơn hàng gặp lỗi — xem nhật ký.";
+            log("Lỗi khi sync đơn hàng: " + ex.Message);
+            return false;
+        }
+        finally
+        {
+            _navigating = false;
+        }
+    }
+
+    /// <summary>
     /// Chọn proxy theo thứ tự ưu tiên (GIỮ NGUYÊN 4 mức của luồng cũ) và ĐỒNG THỜI set
     /// <see cref="_kiotClient"/> — client nguồn KiotProxy của phiên để watchdog canh proxy:
     /// (1) API key KiotProxy RIÊNG của tài khoản → sticky riêng mỗi tài khoản (watchdog BẬT),

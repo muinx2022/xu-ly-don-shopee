@@ -83,6 +83,30 @@ CREATE TABLE IF NOT EXISTS proxies (
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id         INTEGER NOT NULL,
+    order_sn           TEXT NOT NULL,
+    shopee_order_id    TEXT,
+    buyer_username     TEXT,
+    items_json         TEXT,
+    item_count         INTEGER,
+    item_summary       TEXT,
+    total_price        INTEGER,
+    total_price_text   TEXT,
+    payment_method     TEXT,
+    status             TEXT,
+    status_description TEXT,
+    cancel_reason      TEXT,
+    channel            TEXT,
+    carrier            TEXT,
+    tracking_number    TEXT,
+    synced_at          TEXT,
+    created_at         TEXT,
+    updated_at         TEXT,
+    UNIQUE(account_id, order_sn)
 );";
         cmd.ExecuteNonQuery();
 

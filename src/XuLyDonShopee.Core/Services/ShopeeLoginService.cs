@@ -155,6 +155,23 @@ public interface ILoginSession : IAsyncDisposable
     /// <param name="downloadDir">Thư mục lưu file phiếu (được tạo nếu chưa có).</param>
     /// <param name="log">Callback ghi log từng bước (null → bỏ qua).</param>
     Task<ArrangeShipmentResult> ProcessFirstOrderAsync(string downloadDir, Action<string>? log = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// <b>Sync đơn hàng — thu thập MỌI đơn ở tab "Tất cả":</b> điều hướng về trang danh sách đơn
+    /// (<c>/portal/sale/order</c>), chuyển sang tab <b>"Tất cả"</b>, rồi <b>duyệt TOÀN BỘ các trang</b> danh
+    /// sách (có chốt chặn an toàn 20 trang), quét thông tin mỗi đơn (mã đơn, người mua, sản phẩm, tổng tiền,
+    /// trạng thái, lý do hủy, kênh/ĐVVC, mã vận đơn) bằng JS <b>CHỈ ĐỌC</b>, khử trùng lặp theo mã đơn, trả
+    /// về danh sách. <b>KHÔNG đụng DB</b> (Core chỉ thu thập &amp; trả DTO; tầng App lưu). Điều hướng/chuyển
+    /// tab bằng thao tác kiểu người CÓ HIT-TEST; phân trang code PHÒNG THỦ (nhiều selector nút "trang sau" +
+    /// điều kiện danh sách phải ĐỔI sau khi bấm) + log chẩn đoán pager nếu không thấy nút.
+    /// <para>
+    /// <b>Graceful — không bao giờ ném (trừ hủy):</b> mọi lỗi bất ngờ → trả về những đơn ĐÃ gom được (không
+    /// mất dữ liệu đã quét) + log lỗi. Riêng <see cref="OperationCanceledException"/> ném XUYÊN để caller dừng
+    /// sạch. Kết quả gồm danh sách đơn, số trang đã quét, và cờ có chạm chốt chặn số trang không.
+    /// </para>
+    /// </summary>
+    /// <param name="log">Callback ghi log tiến trình từng trang (null → bỏ qua).</param>
+    Task<SyncOrdersResult> SyncAllOrdersAsync(Action<string>? log = null, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -2495,6 +2512,495 @@ public class ShopeeLoginService
             }
         }
 
+        // ===== Sync đơn: duyệt tab "Tất cả" mọi trang, thu thập thông tin đơn (Core CHỈ trả DTO) =====
+
+        // Chốt chặn an toàn số trang quét mỗi lượt sync (tránh lặp vô hạn nếu selector "trang sau" đoán sai
+        // hoặc điều kiện dừng không kích hoạt). Chạm cap → dừng + cờ ReachedPageCap.
+        private const int MaxSyncPages = 20;
+
+        public async Task<SyncOrdersResult> SyncAllOrdersAsync(Action<string>? log = null, CancellationToken ct = default)
+        {
+            void L(string m) => log?.Invoke(m);
+
+            // Gom dần + khử trùng lặp theo mã đơn (trang có thể trùng khi Shopee đổi dữ liệu giữa các lần quét).
+            var collected = new List<SyncedOrder>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var pages = 0;
+            var reachedCap = false;
+
+            try
+            {
+                var page = _context.Pages.Count > 0 ? _context.Pages[0] : null;
+                if (page is null)
+                {
+                    // Nói rõ lý do — kẻo tầng App tổng kết "Sync xong: 0 đơn / 0 trang" gây hiểu nhầm hết đơn.
+                    L("Không có trang trình duyệt nào đang mở — dừng sync.");
+                    return new SyncOrdersResult(collected, 0, false);
+                }
+
+                // Random nội bộ + con trỏ bắt đầu ở vị trí ngẫu nhiên (đồng bộ style các thao tác kiểu người).
+                var rng = new Random();
+                var vp = page.ViewportSize;
+                double vw = vp is not null ? vp.Width : 1280;
+                double vh = vp is not null ? vp.Height : 720;
+                double mx = rng.NextDouble() * vw;
+                double my = rng.NextDouble() * vh;
+
+                // Dừng "đọc trang" trước khi bắt đầu.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 1) Về danh sách đơn (/portal/sale/order). ĐÃ ở đó → reload SẠCH (GotoAsync, như bước 1
+                //    ProcessFirstOrderAsync); URL khác → GoToAllOrdersAsync (click menu kiểu người).
+                L("Về danh sách đơn (Tất cả) để sync...");
+                if (ShopeeShippingNav.IsAllOrdersHref(page.Url))
+                {
+                    try
+                    {
+                        await page.GotoAsync(AllOrdersUrl, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = 30000
+                        }).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { /* nuốt lỗi điều hướng — kiểm page.Url ngay dưới */ }
+                }
+                else
+                {
+                    (mx, my) = await GoToAllOrdersAsync(page, mx, my, rng, ct).ConfigureAwait(false);
+                }
+                if (!ShopeeShippingNav.IsAllOrdersHref(page.Url))
+                {
+                    L("Không mở được trang danh sách đơn — dừng sync.");
+                    return new SyncOrdersResult(collected, 0, false);
+                }
+
+                // 1b) Chuyển sang tab "Tất cả" (best-effort: không đổi được thì quét tab hiện tại).
+                (mx, my) = await EnsureOrderListTabAsync(
+                    page, "l1-tab-all", ShopeeShippingNav.IsAllTabText, "Tất cả", mx, my, rng, L, ct).ConfigureAwait(false);
+
+                // Dừng "đọc trang" + chờ danh sách render.
+                await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
+
+                // 2) VÒNG QUÉT TRANG: chờ danh sách ổn định → quét JS chỉ-đọc → gom + khử trùng → sang trang sau.
+                var pagerDiagLogged = false;
+                while (true)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    // Chờ danh sách render ổn định (số card đứng yên 2 lượt liên tiếp) rồi mới quét.
+                    await WaitOrderListReadyAsync(page, 15000, ct).ConfigureAwait(false);
+
+                    var scanJson = await page.EvaluateAsync<string>(ScanOrdersJs).ConfigureAwait(false);
+                    var pageOrders = ParseOrdersJson(scanJson);
+                    pages++;
+                    foreach (var o in pageOrders)
+                    {
+                        if (seen.Add(o.OrderSn))
+                        {
+                            collected.Add(o);
+                        }
+                    }
+                    L($"Sync trang {pages}: {pageOrders.Count} đơn.");
+
+                    // Ký hiệu danh sách hiện tại (số card + mã đơn đầu) — để phát hiện danh sách ĐỔI sau khi bấm.
+                    var signatureBefore = await ReadListSignatureAsync(page, ct).ConfigureAwait(false);
+
+                    // Tìm nút "trang sau" (PHÒNG THỦ: nhiều selector, nhận nút có box & KHÔNG disabled).
+                    var nextBtn = await FindNextPageButtonAsync(page, ct).ConfigureAwait(false);
+                    if (nextBtn is null)
+                    {
+                        // Không thấy nút trang sau → hết trang (hoặc selector chưa khớp DOM thật). LẦN ĐẦU
+                        // log MỘT dòng chẩn đoán pager để tinh chỉnh selector sau lần chạy đầu.
+                        if (!pagerDiagLogged)
+                        {
+                            await LogPagerDiagnosticAsync(page, L, ct).ConfigureAwait(false);
+                            pagerDiagLogged = true;
+                        }
+                        L("Không còn trang sau — sync xong.");
+                        break;
+                    }
+
+                    // Có trang sau nhưng đã tới chốt chặn → dừng, cờ cap (có thể còn đơn chưa quét).
+                    if (pages >= MaxSyncPages)
+                    {
+                        reachedCap = true;
+                        L($"Đã quét {pages} trang — chạm chốt chặn {MaxSyncPages} trang, dừng (có thể còn đơn chưa quét).");
+                        break;
+                    }
+
+                    // Bấm "trang sau" kiểu người (hit-test).
+                    bool clicked;
+                    (mx, my, clicked) = await TryHumanClickVisibleAsync(page, nextBtn, mx, my, rng, ct).ConfigureAwait(false);
+                    if (!clicked)
+                    {
+                        L("Không bấm được nút trang sau — dừng sync.");
+                        break;
+                    }
+
+                    // Chờ danh sách ĐỔI (poll ≤10s: số card / mã đơn đầu khác đi). Không đổi → coi như hết trang.
+                    var changed = await WaitListChangedAsync(page, signatureBefore, 10000, ct).ConfigureAwait(false);
+                    if (!changed)
+                    {
+                        L("Danh sách không đổi sau khi bấm trang sau — coi như hết trang, dừng sync.");
+                        break;
+                    }
+
+                    // Dừng ngẫu nhiên kiểu người giữa các trang.
+                    await Task.Delay(rng.Next(1500, 3500), ct).ConfigureAwait(false);
+                }
+
+                return new SyncOrdersResult(collected, pages, reachedCap);
+            }
+            catch (OperationCanceledException)
+            {
+                // Bị dừng chủ động → ném để tầng App bắt và dừng SẠCH.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Lỗi bất ngờ (selector đổi, context ngắt...) → trả những đơn ĐÃ gom được (không mất dữ liệu).
+                L("Sync đơn gặp lỗi bất ngờ: " + ex.Message + " — trả về những đơn đã gom được.");
+                return new SyncOrdersResult(collected, pages, reachedCap);
+            }
+        }
+
+        // JS CHỈ-ĐỌC quét MỌI card đơn của trang hiện tại theo bảng selector do người dùng cung cấp. Bọc từng
+        // card + từng item trong try để một card/item lạ KHÔNG phá cả trang. Trả JSON.stringify(mảng đơn).
+        private const string ScanOrdersJs = @"() => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const cards = document.querySelectorAll(""a[data-testid='order-item']"");
+    const out = [];
+    for (const card of cards) {
+        try {
+            const snEl = card.querySelector('.order-sn');
+            const snRaw = snEl ? norm(snEl.textContent) : '';
+            const snTokens = snRaw.split(' ');
+            const orderSn = snTokens.length ? snTokens[snTokens.length - 1] : '';
+
+            let shopeeOrderId = '';
+            const href = card.getAttribute('href') || '';
+            const hm = href.match(/\/portal\/sale\/order\/(\d+)/);
+            if (hm) shopeeOrderId = hm[1];
+
+            const buyerEl = card.querySelector('.buyer-username');
+            const buyer = buyerEl ? norm(buyerEl.textContent) : '';
+
+            const items = [];
+            for (const it of card.querySelectorAll('.item')) {
+                try {
+                    const nameEl = it.querySelector('.item-name');
+                    const descEl = it.querySelector('.item-description');
+                    const amtEl = it.querySelector('.item-amount');
+                    const imgEl = it.querySelector('.item-image');
+                    const name = nameEl ? norm(nameEl.textContent) : '';
+                    let variation = descEl ? norm(descEl.textContent) : '';
+                    variation = variation.replace(/^Variation\s*:?\s*/i, '').trim();
+                    let amount = amtEl ? norm(amtEl.textContent) : '';
+                    amount = amount.replace(/^[x×]\s*/i, '').trim();
+                    let image = '';
+                    if (imgEl) image = imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || '';
+                    items.push({ name, variation, amount, image });
+                } catch (e) { /* item lạ — bỏ qua */ }
+            }
+
+            const totalEl = card.querySelector('.total-price');
+            const totalText = totalEl ? norm(totalEl.textContent) : '';
+
+            const payEl = card.querySelector('.payment-method');
+            const payment = payEl ? norm(payEl.textContent) : '';
+
+            const statusEl = card.querySelector('.status-info-col .status');
+            const status = statusEl ? norm(statusEl.textContent) : '';
+
+            const sdescEl = card.querySelector('.status-description');
+            const statusDesc = sdescEl ? norm(sdescEl.textContent) : '';
+
+            let cancelReason = '';
+            const statusCol = card.querySelector('.status-info-col') || card;
+            const pops = statusCol.querySelectorAll('.eds-popover__content');
+            for (const pop of pops) {
+                const raw = pop.textContent || '';
+                if (raw.indexOf('Lý do hủy') >= 0) {
+                    cancelReason = norm(raw).replace(/^.*?Lý do hủy\s*:?\s*/, '').trim();
+                    break;
+                }
+            }
+
+            const channelEl = card.querySelector('.maksed-channel-name');
+            const channel = channelEl ? norm(channelEl.textContent) : '';
+            const carrierEl = card.querySelector('.fulfilment-channel-name');
+            const carrier = carrierEl ? norm(carrierEl.textContent) : '';
+
+            const trackEl = card.querySelector('.tracking-number');
+            const tracking = trackEl ? norm(trackEl.textContent) : '';
+
+            out.push({
+                orderSn, shopeeOrderId, buyer, items,
+                totalText, payment, status, statusDesc, cancelReason,
+                channel, carrier, tracking
+            });
+        } catch (e) { /* card lạ — bỏ qua, không phá cả trang */ }
+    }
+    return JSON.stringify(out);
+}";
+
+        /// <summary>
+        /// Parse JSON (chuỗi <see cref="ScanOrdersJs"/> trả về) → danh sách <see cref="SyncedOrder"/>. Bọc
+        /// từng phần tử trong try (phần tử lạ không phá cả danh sách); đơn KHÔNG có mã (orderSn rỗng) bị BỎ.
+        /// Tổng tiền parse qua <see cref="ShopeeShippingNav.ParseVndAmount"/> (bỏ mọi ký tự không phải số).
+        /// </summary>
+        private static List<SyncedOrder> ParseOrdersJson(string? json)
+        {
+            var result = new List<SyncedOrder>();
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return result;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    return result;
+                }
+
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    try
+                    {
+                        var orderSn = GetJsonString(el, "orderSn");
+                        if (string.IsNullOrWhiteSpace(orderSn))
+                        {
+                            continue; // không có mã đơn → không làm khóa được, bỏ
+                        }
+
+                        var itemsJson = "[]";
+                        var itemCount = 0;
+                        string? itemSummary = null;
+                        if (el.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+                        {
+                            itemsJson = items.GetRawText();
+                            itemCount = items.GetArrayLength();
+                            if (itemCount > 0)
+                            {
+                                itemSummary = NullIfBlank(GetJsonString(items[0], "name"));
+                            }
+                        }
+
+                        var totalText = GetJsonString(el, "totalText");
+                        result.Add(new SyncedOrder
+                        {
+                            OrderSn = orderSn,
+                            ShopeeOrderId = NullIfBlank(GetJsonString(el, "shopeeOrderId")),
+                            BuyerUsername = NullIfBlank(GetJsonString(el, "buyer")),
+                            ItemsJson = itemsJson,
+                            ItemCount = itemCount,
+                            ItemSummary = itemSummary,
+                            TotalPriceText = NullIfBlank(totalText),
+                            TotalPrice = ShopeeShippingNav.ParseVndAmount(totalText),
+                            PaymentMethod = NullIfBlank(GetJsonString(el, "payment")),
+                            Status = NullIfBlank(GetJsonString(el, "status")),
+                            StatusDescription = NullIfBlank(GetJsonString(el, "statusDesc")),
+                            CancelReason = NullIfBlank(GetJsonString(el, "cancelReason")),
+                            Channel = NullIfBlank(GetJsonString(el, "channel")),
+                            Carrier = NullIfBlank(GetJsonString(el, "carrier")),
+                            TrackingNumber = NullIfBlank(GetJsonString(el, "tracking")),
+                        });
+                    }
+                    catch { /* phần tử lạ — bỏ qua, không phá cả danh sách */ }
+                }
+            }
+            catch { /* JSON hỏng — trả những gì đã parse được */ }
+
+            return result;
+        }
+
+        /// <summary>Đọc chuỗi từ property JSON (chỉ nhận String; thiếu / kiểu khác → rỗng).</summary>
+        private static string GetJsonString(JsonElement el, string prop)
+            => el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString() ?? string.Empty
+                : string.Empty;
+
+        /// <summary>Rỗng/khoảng-trắng → null (để cột DB để NULL thay vì chuỗi rỗng).</summary>
+        private static string? NullIfBlank(string? s)
+            => string.IsNullOrWhiteSpace(s) ? null : s;
+
+        /// <summary>
+        /// Chờ danh sách đơn render ỔN ĐỊNH: số card <c>a[data-testid='order-item']</c> &gt; 0 và ĐỨNG YÊN 2
+        /// lượt poll liên tiếp (~400ms/lượt). Hết <paramref name="timeoutMs"/> vẫn chưa ổn định (kể cả shop 0
+        /// đơn) → về (caller quét tiếp, thấy 0 đơn thì tự dừng). JS CHỈ-ĐỌC.
+        /// </summary>
+        private static async Task WaitOrderListReadyAsync(IPage page, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            var lastCount = -1;
+            var stableStreak = 0;
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                int count;
+                try
+                {
+                    count = await page.EvaluateAsync<int>(
+                        "() => document.querySelectorAll(\"a[data-testid='order-item']\").length").ConfigureAwait(false);
+                }
+                catch { count = 0; }
+
+                if (count > 0)
+                {
+                    if (count == lastCount)
+                    {
+                        if (++stableStreak >= 2)
+                        {
+                            return; // ổn định 2 lượt liên tiếp → danh sách đã render xong
+                        }
+                    }
+                    else
+                    {
+                        lastCount = count;
+                        stableStreak = 0;
+                    }
+                }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+        }
+
+        /// <summary>Ký hiệu danh sách hiện tại = "&lt;số card&gt;|&lt;mã đơn card đầu&gt;" (JS CHỈ-ĐỌC). Dùng
+        /// so sánh để phát hiện danh sách ĐỔI sau khi bấm trang sau. Lỗi → chuỗi rỗng.</summary>
+        private static async Task<string> ReadListSignatureAsync(IPage page, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                return await page.EvaluateAsync<string>(@"() => {
+    const cards = document.querySelectorAll(""a[data-testid='order-item']"");
+    let first = '';
+    if (cards.length > 0) {
+        const sn = cards[0].querySelector('.order-sn');
+        first = sn ? (sn.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    }
+    return cards.length + '|' + first;
+}").ConfigureAwait(false);
+            }
+            catch { return string.Empty; }
+        }
+
+        /// <summary>
+        /// Dò nút "trang sau" của phân trang (PHÒNG THỦ — chưa có DOM pager thật). Thử lần lượt các selector
+        /// khả dĩ; nhận nút ĐẦU TIÊN có bounding box VÀ không disabled (<see cref="IsUsableNextButtonAsync"/>).
+        /// Không thấy → <c>null</c> (caller coi là hết trang + log chẩn đoán).
+        /// </summary>
+        private static async Task<IElementHandle?> FindNextPageButtonAsync(IPage page, CancellationToken ct)
+        {
+            string[] selectors =
+            {
+                ".eds-pager button.eds-pager__button-next",
+                "li.eds-pager__next button",
+                "button[class*='next']",
+                "[class*='pager'] button:last-of-type",
+            };
+
+            foreach (var sel in selectors)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var candidates = await page.QuerySelectorAllAsync(sel).ConfigureAwait(false);
+                    foreach (var el in candidates)
+                    {
+                        if (await IsUsableNextButtonAsync(el).ConfigureAwait(false))
+                        {
+                            return el;
+                        }
+                    }
+                }
+                catch { /* selector không hợp lệ / chưa render — thử selector kế */ }
+            }
+
+            return null;
+        }
+
+        /// <summary>Nút "trang sau" DÙNG ĐƯỢC: có bounding box (đang hiển thị) VÀ KHÔNG disabled — kiểm cả
+        /// <c>el.disabled</c>, <c>aria-disabled='true'</c>, và class chứa "disabled". Lỗi/handle stale → false.</summary>
+        private static async Task<bool> IsUsableNextButtonAsync(IElementHandle el)
+        {
+            try
+            {
+                if (await el.BoundingBoxAsync().ConfigureAwait(false) is null)
+                {
+                    return false;
+                }
+
+                return await el.EvaluateAsync<bool>(@"el => {
+    if (el.disabled) return false;
+    if (el.getAttribute('aria-disabled') === 'true') return false;
+    const cls = (el.getAttribute('class') || '').toLowerCase();
+    if (cls.split(/\s+/).some(c => c.indexOf('disabled') >= 0)) return false;
+    return true;
+}").ConfigureAwait(false);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>Chờ danh sách ĐỔI so với <paramref name="signatureBefore"/> (poll ~300ms tới hết
+        /// <paramref name="timeoutMs"/>). Bỏ qua trạng thái đang tải (0 card) để không báo "đổi" nhầm lúc danh
+        /// sách vừa bị gỡ. Đổi → true; hết giờ vẫn y nguyên → false (coi như hết trang).</summary>
+        private static async Task<bool> WaitListChangedAsync(
+            IPage page, string signatureBefore, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                await Task.Delay(300, ct).ConfigureAwait(false);
+
+                var now = await ReadListSignatureAsync(page, ct).ConfigureAwait(false);
+                if (now.StartsWith("0|", StringComparison.Ordinal))
+                {
+                    continue; // đang tải (chưa có card) — chờ danh sách mới ổn định rồi mới so
+                }
+                if (now.Length > 0 && now != signatureBefore)
+                {
+                    return true;
+                }
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return false;
+        }
+
+        /// <summary>
+        /// Log MỘT dòng chẩn đoán DOM pager khi không thấy nút "trang sau": đếm + liệt kê tag.class các phần tử
+        /// khớp <c>[class*='pager'],[class*='pagination']</c> (cắt gọn ≤ 12 phần tử) — dữ liệu để tinh chỉnh
+        /// selector sau lần chạy đầu. Best-effort, nuốt lỗi (OCE vẫn ném). JS CHỈ-ĐỌC.
+        /// </summary>
+        private static async Task LogPagerDiagnosticAsync(IPage page, Action<string> L, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                const string diagJs = @"() => {
+    const els = document.querySelectorAll(""[class*='pager'],[class*='pagination']"");
+    const parts = [];
+    let i = 0;
+    for (const el of els) {
+        if (i++ >= 12) break;
+        const c = (el.getAttribute('class') || '').trim().replace(/\s+/g, '.');
+        parts.push(el.tagName.toLowerCase() + (c ? '.' + c : ''));
+    }
+    return els.length + ' phần tử: ' + (parts.join(' | ') || '(không có)');
+}";
+                var diag = await page.EvaluateAsync<string>(diagJs).ConfigureAwait(false);
+                L("Chẩn đoán pager (không thấy nút trang sau): " + diag);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* chẩn đoán fail KHÔNG được phá luồng */ }
+        }
+
         /// <summary>True nếu <paramref name="b"/> mở đầu bằng magic bytes <c>%PDF</c> (0x25 0x50 0x44 0x46) —
         /// nhận đúng file PDF thật, tránh lưu HTML/redirect đăng nhập thành <c>.pdf</c> rác.</summary>
         private static bool LooksPdf(byte[]? b)
@@ -2986,26 +3492,40 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Đảm bảo trang danh sách đơn đang ở tab "Chờ lấy hàng" (BEST-EFFORT — thêm 1 click). Reload/goto
-        /// đưa Shopee về tab mặc định "Tất cả" → đơn cần "Chuẩn bị hàng" (nằm ở tab "Chờ lấy hàng") có thể
-        /// bị đẩy khỏi trang 1 của "Tất cả" khi shop đông đơn → app báo nhầm hết đơn. MỌI nhánh fail chỉ LOG
-        /// rồi ĐI TIẾP (quét tab hiện tại) — KHÔNG ném; chỉ hủy (OperationCanceledException) mới ném xuyên.
-        /// Re-query phần tử tab TƯƠI mỗi lượt poll (thanh tab re-render khi chuyển tab — chống stale handle);
-        /// đọc trạng thái active bằng evaluate CHỈ-ĐỌC; đã active → về ngay KHÔNG click (Shopee đôi khi nhớ
-        /// tab). Chưa active → click kiểu người (hit-test) rồi chờ active + settle danh sách vẽ lại. Trả vị
-        /// trí chuột mới.
+        /// Đảm bảo trang danh sách đơn đang ở tab "Chờ lấy hàng" (BEST-EFFORT — thêm 1 click). Giữ NGUYÊN
+        /// chữ ký &amp; hành vi cũ của luồng Xử lý đơn: gọi <see cref="EnsureOrderListTabAsync"/> với testid
+        /// <c>l1-tab-toship</c>, text khớp <see cref="ShopeeShippingNav.IsToShipTabText"/>, nhãn log "Chờ lấy
+        /// hàng".
         /// </summary>
-        private static async Task<(double X, double Y)> EnsureToShipTabAsync(
+        private static Task<(double X, double Y)> EnsureToShipTabAsync(
             IPage page, double mx, double my, Random rng, Action<string> L, CancellationToken ct)
+            => EnsureOrderListTabAsync(
+                page, "l1-tab-toship", ShopeeShippingNav.IsToShipTabText, "Chờ lấy hàng", mx, my, rng, L, ct);
+
+        /// <summary>
+        /// Đảm bảo thanh tab của trang danh sách đơn đang ở tab <paramref name="tabLabel"/> (BEST-EFFORT —
+        /// thêm 1 click). Reload/goto đưa Shopee về tab mặc định → đơn cần xử lý có thể bị đẩy khỏi trang 1
+        /// khi shop đông đơn → cần click đúng tab trước khi quét. MỌI nhánh fail chỉ LOG rồi ĐI TIẾP (quét
+        /// tab hiện tại) — KHÔNG ném; chỉ hủy (OperationCanceledException) mới ném xuyên. Re-query phần tử
+        /// tab TƯƠI mỗi lượt poll (thanh tab re-render khi chuyển tab — chống stale handle); đọc trạng thái
+        /// active bằng evaluate CHỈ-ĐỌC; đã active → về ngay KHÔNG click (Shopee đôi khi nhớ tab). Chưa active
+        /// → click kiểu người (hit-test) rồi chờ active + settle danh sách vẽ lại. Trả vị trí chuột mới.
+        /// </summary>
+        /// <param name="tabTestId">Giá trị <c>data-testid</c> của tab (khóa chính, vd <c>l1-tab-toship</c>/<c>l1-tab-all</c>).</param>
+        /// <param name="textMatch">So khớp InnerText của <c>.tab-label</c> (fallback khi không có testid).</param>
+        /// <param name="tabLabel">Nhãn tab dùng cho log ("Chờ lấy hàng"/"Tất cả").</param>
+        private static async Task<(double X, double Y)> EnsureOrderListTabAsync(
+            IPage page, string tabTestId, Func<string?, bool> textMatch, string tabLabel,
+            double mx, double my, Random rng, Action<string> L, CancellationToken ct)
         {
-            // 1) Tìm phần tử tab "Chờ lấy hàng" (poll ≤ 10s, ~400ms/lượt, RE-QUERY tươi mỗi lượt — không giữ
-            //    handle qua lượt). testid l1-tab-toship là khóa chính; text StartsWith là fallback.
+            // 1) Tìm phần tử tab (poll ≤ 10s, ~400ms/lượt, RE-QUERY tươi mỗi lượt — không giữ handle qua
+            //    lượt). testid là khóa chính; text là fallback.
             IElementHandle? tabEl = null;
             var findDeadline = DateTime.UtcNow.AddMilliseconds(10000);
             do
             {
                 ct.ThrowIfCancellationRequested();
-                tabEl = await FindToShipTabAsync(page, ct).ConfigureAwait(false);
+                tabEl = await FindOrderListTabAsync(page, tabTestId, textMatch, ct).ConfigureAwait(false);
                 if (tabEl is not null)
                 {
                     break;
@@ -3017,12 +3537,12 @@ public class ShopeeLoginService
 
             if (tabEl is null)
             {
-                L("Không thấy tab Chờ lấy hàng — quét tab hiện tại.");
+                L($"Không thấy tab {tabLabel} — quét tab hiện tại.");
                 return (mx, my);
             }
 
             // 2) Đã active? (evaluate CHỈ-ĐỌC) → về ngay, không log, không click.
-            if (await IsToShipTabActiveAsync(tabEl).ConfigureAwait(false))
+            if (await IsTabActiveAsync(tabEl).ConfigureAwait(false))
             {
                 return (mx, my);
             }
@@ -3032,11 +3552,11 @@ public class ShopeeLoginService
             (mx, my, clicked) = await TryHumanClickVisibleAsync(page, tabEl, mx, my, rng, ct).ConfigureAwait(false);
             if (!clicked)
             {
-                L("Chưa chuyển được sang tab Chờ lấy hàng — quét tab hiện tại.");
+                L($"Chưa chuyển được sang tab {tabLabel} — quét tab hiện tại.");
                 return (mx, my);
             }
 
-            L("Chuyển sang tab Chờ lấy hàng.");
+            L($"Chuyển sang tab {tabLabel}.");
 
             // 4) Chờ tab active ≤ 5s (~300ms/lượt, re-query TƯƠI + đọc lại class mỗi lượt — thanh tab
             //    re-render khi chuyển tab). Active → chờ settle 800–1500ms (danh sách vẽ lại) rồi về. Hết 5s
@@ -3045,8 +3565,8 @@ public class ShopeeLoginService
             do
             {
                 ct.ThrowIfCancellationRequested();
-                var fresh = await FindToShipTabAsync(page, ct).ConfigureAwait(false);
-                if (fresh is not null && await IsToShipTabActiveAsync(fresh).ConfigureAwait(false))
+                var fresh = await FindOrderListTabAsync(page, tabTestId, textMatch, ct).ConfigureAwait(false);
+                if (fresh is not null && await IsTabActiveAsync(fresh).ConfigureAwait(false))
                 {
                     await Task.Delay(rng.Next(800, 1500), ct).ConfigureAwait(false);
                     return (mx, my);
@@ -3056,19 +3576,20 @@ public class ShopeeLoginService
             }
             while (DateTime.UtcNow < activeDeadline);
 
-            L("Chưa chuyển được sang tab Chờ lấy hàng — quét tab hiện tại.");
+            L($"Chưa chuyển được sang tab {tabLabel} — quét tab hiện tại.");
             return (mx, my);
         }
 
         /// <summary>
-        /// Dò phần tử tab "Chờ lấy hàng" trên thanh tab danh sách đơn (MỘT lần, query TƯƠI — poll do người
-        /// gọi). Ưu tiên <c>[data-testid='l1-tab-toship']</c> (khóa chính, từ DOM thật); fallback duyệt mọi
-        /// <c>.tab-label</c> có InnerText khớp <see cref="ShopeeShippingNav.IsToShipTabText"/> (StartsWith,
-        /// chịu badge số). Chỉ nhận phần tử đang hiển thị (có bounding box). Không thấy → <c>null</c>.
+        /// Dò phần tử tab trên thanh tab danh sách đơn (MỘT lần, query TƯƠI — poll do người gọi). Ưu tiên
+        /// <c>[data-testid='{tabTestId}']</c> (khóa chính, từ DOM thật); fallback duyệt mọi <c>.tab-label</c>
+        /// có InnerText khớp <paramref name="textMatch"/>. Chỉ nhận phần tử đang hiển thị (có bounding box).
+        /// Không thấy → <c>null</c>.
         /// </summary>
-        private static async Task<IElementHandle?> FindToShipTabAsync(IPage page, CancellationToken ct)
+        private static async Task<IElementHandle?> FindOrderListTabAsync(
+            IPage page, string tabTestId, Func<string?, bool> textMatch, CancellationToken ct)
         {
-            var el = await FirstVisibleByBoxAsync(page, "[data-testid='l1-tab-toship']", ct).ConfigureAwait(false);
+            var el = await FirstVisibleByBoxAsync(page, $"[data-testid='{tabTestId}']", ct).ConfigureAwait(false);
             if (el is not null)
             {
                 return el;
@@ -3079,7 +3600,7 @@ public class ShopeeLoginService
                 var labels = await page.QuerySelectorAllAsync(".tab-label").ConfigureAwait(false);
                 foreach (var lb in labels)
                 {
-                    if (ShopeeShippingNav.IsToShipTabText(await lb.InnerTextAsync().ConfigureAwait(false))
+                    if (textMatch(await lb.InnerTextAsync().ConfigureAwait(false))
                         && await lb.BoundingBoxAsync().ConfigureAwait(false) is not null)
                     {
                         return lb;
@@ -3091,9 +3612,9 @@ public class ShopeeLoginService
             return null;
         }
 
-        /// <summary>Tab "Chờ lấy hàng" đang active? Evaluate CHỈ-ĐỌC: phần tử tổ tiên gần nhất
+        /// <summary>Tab đang active? Evaluate CHỈ-ĐỌC: phần tử tổ tiên gần nhất
         /// <c>.eds-tabs__nav-tab</c> có class <c>active</c>. Lỗi / handle detached → <c>false</c>.</summary>
-        private static async Task<bool> IsToShipTabActiveAsync(IElementHandle tabEl)
+        private static async Task<bool> IsTabActiveAsync(IElementHandle tabEl)
         {
             try
             {

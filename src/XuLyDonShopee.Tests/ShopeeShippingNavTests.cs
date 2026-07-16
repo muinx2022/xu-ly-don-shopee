@@ -416,4 +416,43 @@ public class ShopeeShippingNavTests
     {
         Assert.Equal(expected, ShopeeShippingNav.SanitizeFileName(input));
     }
+
+    // ===== IsAllTabText: tab "Tất cả" trên thanh tab danh sách đơn (khớp tuyệt đối "tất cả") =====
+    [Theory]
+    [InlineData("Tất cả", true)]
+    [InlineData("  tất cả \n", true)]
+    [InlineData("TẤT CẢ", true)]
+    [InlineData("Chờ lấy hàng", false)]
+    [InlineData("Tất cả đơn", false)]
+    [InlineData("Đang giao", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsAllTabText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsAllTabText(input));
+    }
+
+    // ===== ParseVndAmount: bỏ mọi ký tự không phải số → long?, không parse được → null =====
+    [Theory]
+    [InlineData("₫166.500", 166500L)]
+    [InlineData("₫1.234.567", 1234567L)]
+    [InlineData("166.500đ", 166500L)]
+    [InlineData("  ₫ 89.000  ", 89000L)]
+    [InlineData("0", 0L)]
+    [InlineData("₫12", 12L)]
+    public void ParseVndAmount_CoSo_TraVeSo(string? input, long expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.ParseVndAmount(input));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("₫")]
+    [InlineData("miễn phí")]
+    public void ParseVndAmount_KhongCoSo_TraVeNull(string? input)
+    {
+        Assert.Null(ShopeeShippingNav.ParseVndAmount(input));
+    }
 }

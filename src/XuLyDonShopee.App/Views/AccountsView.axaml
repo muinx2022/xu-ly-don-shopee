@@ -271,8 +271,8 @@
                         </Grid>
 
                         <!-- Hàng nút hành động dạng ICON (tooltip giữ nguyên tên + mô tả cũ). Nhóm trái Lưu/Hủy,
-                             nhóm phải Kiểm tra/Dừng/Xử lý đơn/Mở trang. Class màu giữ nguyên, thêm formIcon để vuông gọn. -->
-                        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
+                             nhóm phải Kiểm tra/Sync/Dừng/Xử lý đơn/Mở trang. Class màu giữ nguyên, thêm formIcon để vuông gọn. -->
+                        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
                             <Button Grid.Column="0" Classes="accent formIcon" Content="✓"
                                     Command="{Binding SaveCommand}"
                                     ToolTip.Tip="Lưu thay đổi" />
@@ -284,17 +284,22 @@
                                     Command="{Binding CheckOrdersCommand}"
                                     IsEnabled="{Binding CanCheckOrders}"
                                     ToolTip.Tip="Kiểm tra — Về trang chủ Seller và kiểm tra số đơn Chờ Lấy Hàng ngay (không đợi chu kỳ 30')" />
+                            <!-- Sync Đơn hàng: vào Quản lý đơn hàng tab Tất cả, duyệt mọi trang, lưu đơn về máy. Bật khi phiên đang chạy. -->
+                            <Button Grid.Column="4" Classes="secondary formIcon" Content="⇊" Margin="8,0,0,0"
+                                    Command="{Binding SyncOrdersCommand}"
+                                    IsEnabled="{Binding CanSyncOrders}"
+                                    ToolTip.Tip="Sync Đơn hàng — vào Quản lý đơn hàng tab Tất cả, duyệt mọi trang và lưu thông tin đơn về máy" />
                             <!-- Dừng phiên của TÀI KHOẢN ĐANG CHỌN (chỉ bật khi tài khoản đó đang chạy). -->
-                            <Button Grid.Column="4" Classes="secondary formIcon" Content="■" Margin="8,0,0,0"
+                            <Button Grid.Column="5" Classes="secondary formIcon" Content="■" Margin="8,0,0,0"
                                     Command="{Binding StopCommand}"
                                     IsEnabled="{Binding CanStopSeller}"
                                     ToolTip.Tip="Dừng — Dừng phiên đang mở của tài khoản này (đóng cửa sổ Brave của phiên đó)" />
                             <!-- Xử lý đơn: mở Cài đặt vận chuyển → tab Địa Chỉ (kiểu người). Bật khi Chờ lấy hàng > 0. -->
-                            <Button Grid.Column="5" Classes="accentOutline formIcon" Content="►" Margin="8,0,0,0"
+                            <Button Grid.Column="6" Classes="accentOutline formIcon" Content="►" Margin="8,0,0,0"
                                     Command="{Binding ProcessOrdersCommand}"
                                     IsEnabled="{Binding CanProcessOrders}"
                                     ToolTip.Tip="Xử lý đơn — Mở Cài đặt vận chuyển → tab Địa Chỉ trong phiên đang chạy (bật khi Chờ lấy hàng > 0)" />
-                            <Button Grid.Column="6" Classes="accentOutline formIcon" Content="↗" Margin="8,0,0,0"
+                            <Button Grid.Column="7" Classes="accentOutline formIcon" Content="↗" Margin="8,0,0,0"
                                     Command="{Binding OpenSellerCommand}"
                                     IsEnabled="{Binding CanOpenSeller}"
                                     ToolTip.Tip="Mở trang bán hàng — Mở Shopee Seller để đăng nhập và lưu cookie vào tài khoản này (mở nhiều tài khoản song song)" />

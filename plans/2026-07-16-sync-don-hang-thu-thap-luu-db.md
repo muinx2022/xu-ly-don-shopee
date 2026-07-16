@@ -1,7 +1,7 @@
 # Plan: Sync Đơn hàng (phần 1) — nút Sync, duyệt tab "Tất cả" mọi trang, lưu đơn vào DB
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng smoke — nếu chỉ sync được 1 trang, gửi dòng "Chẩn đoán pager" để tinh chỉnh selector)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -92,4 +92,6 @@ Lưu ý: đơn "Chờ lấy hàng" có biến thể card dạng package (`.packa
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus làm đủ A/B/C: bảng `orders` (UNIQUE account_id+order_sn) + `OrdersRepository.UpsertMany` transaction (giữ created_at khi cập nhật) + `CountByAccount`; DTO `SyncedOrder` + `SyncOrdersResult`; `SyncAllOrdersAsync` (điều hướng/reload → tab "Tất cả" qua `EnsureOrderListTabAsync` — tổng quát hóa từ `EnsureToShipTabAsync`, wrapper giữ nguyên hành vi Xử lý đơn → vòng trang: chờ danh sách ổn định → ScanOrdersJs chỉ-đọc → khử trùng OrderSn → nút trang-sau phòng thủ 4 selector + điều kiện danh-sách-đổi + cap 20 trang + log chẩn đoán pager); `AccountSession.SyncOrdersAsync` (guard _navigating, upsert, tổng kết "Sync xong: N đơn / M trang — thêm X mới, cập nhật Y"); nút Sync `⇊` + `CanSyncOrders`. 25 test mới (OrdersRepository 6, IsAllTabText 8, ParseVndAmount 11). 7 điểm làm khác plan đều trong khuôn khổ, đã duyệt.
+
+Nghiệm thu (Fable): tự build 0 warning + 428/428 test; panel đối kháng 3 lát chốt 2 finding mức thấp — (1) nhánh không-có-trang trả kết quả rỗng im lặng → Fable vá 1 dòng log; (2) guard `_navigating` check-then-set không nguyên tử — mẫu CÓ SẴN từ trước ở CheckOrders/ProcessOrders, cửa sổ micro-giây, GHI NỢ sửa cả cụm trong việc riêng; 4 phát hiện khác bị bác (đã có guard danh-sách-đổi chặn lặp). Smoke thật: CHỜ NGƯỜI DÙNG — bấm ⇊ trên tài khoản đang chạy; nếu shop nhiều trang mà chỉ sync 1 trang, gửi dòng "Chẩn đoán pager (không thấy nút trang sau): ..." để tinh chỉnh selector (DOM pager chưa có thật).

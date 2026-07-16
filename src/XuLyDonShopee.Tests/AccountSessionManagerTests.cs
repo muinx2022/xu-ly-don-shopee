@@ -51,6 +51,8 @@ public class AccountSessionManagerTests
 
         public Task<bool> CheckOrdersAsync() => Task.FromResult(false);
 
+        public Task<bool> SyncOrdersAsync() => Task.FromResult(false);
+
         /// <summary>Mô phỏng phiên phát lại sự kiện Changed (vd event Stopped TRỄ) mà không đổi State.</summary>
         public void RaiseChanged() => Changed?.Invoke();
 

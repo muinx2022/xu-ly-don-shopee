@@ -75,4 +75,13 @@ public interface IAccountSession
     /// để nhịp 30' không reload chồng lên giữa chừng.
     /// </summary>
     Task<bool> CheckOrdersAsync();
+
+    /// <summary>
+    /// <b>Sync Đơn hàng:</b> trong phiên ĐANG chạy, vào Quản lý đơn hàng → tab "Tất cả", duyệt MỌI trang danh
+    /// sách (chốt chặn an toàn) thu thập thông tin đơn rồi <b>upsert về DB</b> (bảng <c>orders</c>), ghi log
+    /// tiến trình + tổng kết (thêm mới / cập nhật). Trả <c>false</c> nếu phiên chưa chạy / đang bận điều hướng
+    /// (graceful, KHÔNG ném). Loại trừ lẫn nhau với Xử lý đơn / Kiểm tra qua cờ điều hướng bao trùm (không hai
+    /// luồng chuột trên cùng trang).
+    /// </summary>
+    Task<bool> SyncOrdersAsync();
 }

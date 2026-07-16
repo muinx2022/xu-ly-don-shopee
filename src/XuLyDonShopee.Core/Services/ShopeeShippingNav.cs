@@ -174,6 +174,12 @@ public static class ShopeeShippingNav
     public static bool IsAllOrdersText(string? s)
         => NormalizeUiText(s) == "tất cả";
 
+    /// <summary>True nếu nhãn TAB (đã chuẩn hóa) chính là "tất cả" — tab "Tất cả" trên thanh tab của trang
+    /// danh sách đơn (<c>l1-tab-all</c>), phân biệt với các tab khác ("chờ lấy hàng"/"đang giao"...). Tab
+    /// "Tất cả" KHÔNG kèm badge số nên khớp tuyệt đối (khác <see cref="IsToShipTabText"/> dùng StartsWith).</summary>
+    public static bool IsAllTabText(string? s)
+        => NormalizeUiText(s) == "tất cả";
+
     /// <summary>True nếu text (đã chuẩn hóa) BẮT ĐẦU bằng "chờ lấy hàng" — nhãn tab "Chờ lấy hàng" trên
     /// trang danh sách đơn (nhãn có thể kèm badge số: "Chờ lấy hàng (10)"). Dùng StartsWith vì badge.</summary>
     public static bool IsToShipTabText(string? s)
@@ -259,6 +265,35 @@ public static class ShopeeShippingNav
 
         var result = sb.ToString().Trim('_');
         return result.Length == 0 ? "phieu" : result;
+    }
+
+    /// <summary>
+    /// Parse chuỗi tổng tiền lấy từ DOM về số nguyên VND: <b>bỏ MỌI ký tự không phải chữ số ASCII</b> rồi
+    /// parse. "₫166.500" → <c>166500</c>; "₫1.234.567" → <c>1234567</c>; "166.500đ" → <c>166500</c>.
+    /// Null/rỗng/không có chữ số nào / tràn số → <c>null</c> (không parse được → cột total_price để NULL).
+    /// </summary>
+    public static long? ParseVndAmount(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s))
+        {
+            return null;
+        }
+
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (var ch in s)
+        {
+            if (ch is >= '0' and <= '9')
+            {
+                sb.Append(ch);
+            }
+        }
+
+        if (sb.Length == 0)
+        {
+            return null;
+        }
+
+        return long.TryParse(sb.ToString(), out var value) ? value : null;
     }
 }
 
