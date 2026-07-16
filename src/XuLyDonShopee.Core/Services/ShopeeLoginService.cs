@@ -2998,6 +2998,10 @@ public class ShopeeLoginService
                             {
                                 L($"Chưa đọc được số tiền cuối cùng cho đơn {order.OrderSn}.");
                             }
+
+                            // Chống bot: đọc xong ĐÓNG NGAY là dấu hiệu máy → dừng "đọc trang" kiểu người
+                            // 3–5s ngẫu nhiên rồi mới đóng tab. (Hủy giữa chừng → OCE ném xuyên, finally vẫn đóng tab.)
+                            await Task.Delay(rng.Next(3000, 5000), ct).ConfigureAwait(false);
                         }
                         finally
                         {
