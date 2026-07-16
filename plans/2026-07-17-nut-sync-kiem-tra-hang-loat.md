@@ -1,8 +1,12 @@
 # Plan: Nút "Kiểm tra" & "Sync" HÀNG LOẠT ở panel danh sách tài khoản (áp dụng cho các tài khoản đang tick)
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng smoke)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus tổng quát hóa `RunOrAutoStartAsync` nhận `(accountId, email, actionName, action)` — nút đơn chụp `_editingId`/email trước await rồi gọi (giữ nguyên hành vi); 2 command batch `CheckSelected`/`SyncSelected` (guard cờ `_checkSelectedRunning`/`_syncSelectedRunning`) → `RunSelectedBatchAsync` chụp danh sách tick trước await, `Task.WhenAll` per-account độc lập lỗi + log theo email shop, tổng kết source "Hàng loạt"; 2 nút `⟳`/`⇊` thêm sau nút `✕` panel danh sách (luôn bật, kiểm tick lúc bấm — nhất quán 4 nút cũ). Panel đối kháng giữ 1 lỗi vừa: guard `_autoStartingIds` nuốt âm thầm lượt thứ 2 cùng tài khoản đang chờ mở phiên → Opus vá thêm dòng log dấu vết (không đổi ngữ nghĩa guard); 2 finding khác bị bác (log tổng kết; va chạm session đã có `_navigating` chặn). Build 0 warning + 480/480 (tổng sau merge + vá). Smoke: CHỜ NGƯỜI DÙNG.
 
 ## 1. Bối cảnh & mục tiêu
 
