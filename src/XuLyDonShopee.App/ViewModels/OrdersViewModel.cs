@@ -117,7 +117,8 @@ public partial class OrdersViewModel : ViewModelBase
         foreach (var row in _services.Orders.Query(accountId, status, search))
         {
             var label = labels.TryGetValue(row.AccountId, out var email) ? email : $"(TK #{row.AccountId})";
-            Rows.Add(new OrderRowViewModel(row, label));
+            // notify: link "In phiếu" của dòng báo trạng thái (thiếu file / lỗi mở) ra StatusMessage của màn.
+            Rows.Add(new OrderRowViewModel(row, label, msg => StatusMessage = msg));
         }
 
         OnPropertyChanged(nameof(TotalText));

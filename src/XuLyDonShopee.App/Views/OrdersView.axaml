@@ -8,6 +8,30 @@
              x:CompileBindings="False"
              x:DataType="vm:OrdersViewModel">
 
+    <!-- Nút dạng link (cột "Phiếu"): nền trong suốt, chữ cam, gạch chân khi rê chuột -->
+    <UserControl.Styles>
+        <Style Selector="Button.linky">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.linky /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.linky:pointerover">
+            <Setter Property="Foreground" Value="{StaticResource AccentHoverBrush}" />
+        </Style>
+        <Style Selector="Button.linky:pointerover TextBlock">
+            <Setter Property="TextDecorations" Value="Underline" />
+        </Style>
+    </UserControl.Styles>
+
     <DockPanel Margin="24,24,32,24">
 
         <!-- Tiêu đề -->
@@ -68,6 +92,16 @@
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Tài khoản" Binding="{Binding AccountLabel}" Width="1.3*" />
                 <DataGridTextColumn Header="Mã đơn" Binding="{Binding OrderSn}" Width="130" />
+                <DataGridTemplateColumn Header="Phiếu" Width="90">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Button Classes="linky" Command="{Binding OpenSlipCommand}"
+                                    ToolTip.Tip="Mở file PDF phiếu giao đã tải của đơn này">
+                                <TextBlock Text="In phiếu" />
+                            </Button>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="Người mua" Binding="{Binding Buyer}" Width="1.2*" />
                 <DataGridTextColumn Header="Sản phẩm" Binding="{Binding Product}" Width="2*" />
                 <DataGridTextColumn Header="Tổng tiền" Binding="{Binding Total}" Width="105" />
