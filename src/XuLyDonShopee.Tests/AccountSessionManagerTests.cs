@@ -20,6 +20,7 @@ public class AccountSessionManagerTests
         public SessionState State { get; private set; } = SessionState.Stopped;
         public string? StatusText => null;
         public int? ToShipCount => null;
+        public bool ReadyForActions { get; set; } // stub cho phép set khi cần (mặc định false)
         public string? LastError => null;
         public Process? BraveProcess => null;
 

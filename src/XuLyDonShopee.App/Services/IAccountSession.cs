@@ -42,6 +42,14 @@ public interface IAccountSession
     /// <summary>Số đơn "Chờ Lấy Hàng" đọc gần nhất (null = chưa đọc được / chưa đăng nhập).</summary>
     int? ToShipCount { get; }
 
+    /// <summary>
+    /// True khi phiên đã "SẴN SÀNG THAO TÁC" của lần mở HIỆN TẠI: đã tự-đăng-nhập xong và đọc được số
+    /// "Chờ Lấy Hàng" lần đầu. Cờ TƯỜNG MINH này (không suy từ <see cref="ToShipCount"/> — số đó không reset
+    /// khi relaunch nên dễ "sẵn sàng ảo") để VM CHỜ đúng thời điểm rồi mới Sync/Kiểm tra, tránh giẫm lên luồng
+    /// tự-đăng-nhập. false ở đầu mỗi lần mở/relaunch và khi Stopped/Error.
+    /// </summary>
+    bool ReadyForActions { get; }
+
     /// <summary>Thông điệp lỗi gần nhất (có khi <see cref="State"/> == <see cref="SessionState.Error"/>).</summary>
     string? LastError { get; }
 

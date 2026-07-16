@@ -500,4 +500,110 @@ public class AccountsViewModelTests
         Assert.Equal("TP Hồ Chí Minh", services.Accounts.GetAll().Single().PickupAddress);
     }
 
+    // ===== Nút Sync/Kiểm tra LUÔN bật khi đang xem tài khoản ĐÃ LƯU (không phụ thuộc phiên chạy) =====
+    [Fact]
+    public void CanSyncCheck_ChonTaiKhoanDaLuu_Bat_DuChuaMoPhien()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        // Chưa chọn gì → cả 2 nút tắt (chưa có tài khoản để thao tác).
+        Assert.False(vm.CanSyncOrders);
+        Assert.False(vm.CanCheckOrders);
+
+        vm.SelectedRow = vm.Accounts.First();
+
+        // Đang xem tài khoản đã lưu, KHÔNG mở phiên nào → 2 nút VẪN bật (bấm sẽ tự mở phiên).
+        Assert.False(services.Sessions.IsRunning(vm.Accounts.First().Id));
+        Assert.True(vm.CanSyncOrders);
+        Assert.True(vm.CanCheckOrders);
+    }
+
+    // ===== Tài khoản MỚI chưa lưu (IsNew) → 2 nút tắt =====
+    [Fact]
+    public void CanSyncCheck_TaiKhoanMoiChuaLuu_Tat()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+
+        var vm = new AccountsViewModel(services);
+        vm.AddCommand.Execute(null); // form tạo mới (IsNew = true), chưa có Id
+
+        Assert.False(vm.CanSyncOrders);
+        Assert.False(vm.CanCheckOrders);
+    }
+
+    // ===== Sau khi LƯU tài khoản mới → có Id, hết IsNew → 2 nút bật =====
+    [Fact]
+    public void CanSyncCheck_SauKhiLuuTaiKhoanMoi_Bat()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+
+        var vm = new AccountsViewModel(services);
+        vm.AddCommand.Execute(null);
+        Assert.False(vm.CanSyncOrders); // đang tạo mới → tắt
+
+        vm.EditEmail = "new@mail.com";
+        vm.EditPassword = "123";
+        vm.SaveCommand.Execute(null);
+
+        // Đã lưu (có Id, IsNew=false, vẫn đang xem) → bật.
+        Assert.False(vm.IsNew);
+        Assert.True(vm.CanSyncOrders);
+        Assert.True(vm.CanCheckOrders);
+    }
+
+    // ===== Bỏ chọn (SelectedRow=null) → 2 nút tắt lại =====
+    [Fact]
+    public void CanSyncCheck_BoChon_Tat()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        vm.SelectedRow = vm.Accounts.First();
+        Assert.True(vm.CanSyncOrders);
+
+        vm.SelectedRow = null; // rời khỏi tài khoản (không ở chế độ tạo mới)
+
+        Assert.False(vm.CanSyncOrders);
+        Assert.False(vm.CanCheckOrders);
+    }
+
+    // ===== Nút Sync/Kiểm tra phát PropertyChanged khi đổi chọn (để binding IsEnabled cập nhật) =====
+    [Fact]
+    public void CanSyncCheck_PhatPropertyChanged_KhiDoiChon()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        var raised = new HashSet<string>();
+        vm.PropertyChanged += (_, e) => { if (e.PropertyName is not null) raised.Add(e.PropertyName); };
+
+        vm.SelectedRow = vm.Accounts.First();
+
+        Assert.Contains(nameof(vm.CanSyncOrders), raised);
+        Assert.Contains(nameof(vm.CanCheckOrders), raised);
+    }
+
+    // ===== Hàm thuần quyết định "phiên sẵn sàng thao tác" theo CỜ TƯỜNG MINH ReadyForActions =====
+    // (KHÔNG suy từ ToShipCount != null — số đơn cũ còn sót khi relaunch sẽ gây "sẵn sàng ảo" lúc đang login.)
+    [Theory]
+    [InlineData(SessionState.Running, true, true)]    // Running + cờ bật → sẵn sàng (đăng nhập xong + đọc số lần đầu)
+    [InlineData(SessionState.Running, false, false)]  // Running nhưng cờ CHƯA bật (đang login / số đơn cũ) → CHƯA sẵn sàng
+    [InlineData(SessionState.Opening, true, false)]   // đang mở → chưa sẵn sàng (dù cờ lỡ còn sót → chốt bằng state)
+    [InlineData(SessionState.Stopped, true, false)]
+    [InlineData(SessionState.Error, true, false)]
+    public void IsSessionReadyForActions_DungTheoCoTuongMinh_VaState(
+        SessionState state, bool ready, bool expected)
+    {
+        Assert.Equal(expected, AccountsViewModel.IsSessionReadyForActions(state, ready));
+    }
+
 }
