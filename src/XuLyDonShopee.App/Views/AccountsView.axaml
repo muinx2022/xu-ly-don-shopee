@@ -180,6 +180,14 @@
                         <Button Classes="iconAction" Content="✕"
                                 Command="{Binding StopAllCommand}"
                                 ToolTip.Tip="Dừng tất cả" />
+                        <!-- Kiểm tra HÀNG LOẠT: với mọi tài khoản đang tick, kiểm số đơn Chờ lấy hàng (tự mở phiên nếu chưa mở). -->
+                        <Button Classes="iconAction" Content="⟳"
+                                Command="{Binding CheckSelectedCommand}"
+                                ToolTip.Tip="Kiểm tra đã chọn — kiểm số đơn Chờ lấy hàng của các tài khoản đang tick (tự mở phiên nếu chưa mở)" />
+                        <!-- Sync HÀNG LOẠT: với mọi tài khoản đang tick, sync đơn hàng (tự mở phiên nếu chưa mở). -->
+                        <Button Classes="iconAction" Content="⇊"
+                                Command="{Binding SyncSelectedCommand}"
+                                ToolTip.Tip="Sync đã chọn — sync đơn hàng của các tài khoản đang tick (tự mở phiên nếu chưa mở)" />
                     </StackPanel>
 
                     <!-- Danh sách tài khoản: mỗi dòng "[ ] Tên shop" + chấm trạng thái. -->
