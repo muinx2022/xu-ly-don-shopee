@@ -413,3 +413,24 @@ không nhả chuột. Sửa 2 file:
 (389 nền + 1 ca `CoCoDisablePopupBlocking`). Không WDAC chặn. Không native click (grep
 `.ClickAsync/.FillAsync/Mouse.ClickAsync/.CheckAsync/.SetCheckedAsync` = 0). Phạm vi: `BraveLaunchArgs.cs`,
 `BraveLaunchArgsTests.cs`, `ShopeeLoginService.cs`. KHÔNG commit. CHƯA smoke live nhánh này.
+
+### Sửa lượt smoke tiếp (2026-07-16) — về list đơn nhưng không xử lý được (lấy cứng card đầu)
+
+Smoke báo "về đến list đơn hàng, không xử lý được — cần check TOÀN BỘ đơn ở đó và xử lý cái đầu tiên".
+Nguyên nhân: code lấy CỨNG card đầu tiên (`FindFirstOrderCardAsync`) — card đầu có thể là đơn đã arrange /
+trạng thái khác, KHÔNG có nút "Chuẩn bị hàng"; lại tìm nút theo `data-testid='action-button-2'` (vị trí) nên
+ở đơn trạng thái khác trúng nút KHÁC. Sửa (chỉ `ShopeeLoginService.cs`, `ProcessFirstOrderAsync` bước 2-3):
+- Thêm helper `FindFirstProcessableOrderAsync(page, 15s, L, ct)` → trả `(Card, PrepareBtn, OrderCode)`: QUÉT
+  TẤT CẢ card (`[data-testid='order-item']` → `a.order-card` → `.order-card`, dùng selector đầu ra >0), duyệt
+  tìm đơn ĐẦU TIÊN có nút TEXT "chuẩn bị hàng" (`IsPrepareOrderButtonText`, KHÔNG dựa data-testid vị trí),
+  chỉ nhận nút có bounding box; log "Thấy N đơn trong danh sách." (smoke biết app có thấy đơn không). Danh
+  sách rỗng / không đơn nào có "Chuẩn bị hàng" → `(null,null,"")`.
+- `ProcessFirstOrderAsync` dùng helper này thay `FindFirstOrderCardAsync` + `FindPrepareButtonAsync`; card/nút
+  null → `NoOrder` (L "Không còn đơn nào cần Chuẩn bị hàng."). Giữ nguyên click "Chuẩn bị hàng" verified,
+  modal, dropoff, Xác nhận, In phiếu giao, tải/in, đóng modal.
+- XÓA `FindFirstOrderCardAsync` + `FindPrepareButtonAsync` (không còn ai gọi); GIỮ `ReadOrderSnAsync` (helper
+  mới dùng để lấy mã đơn).
+
+**Kiểm chứng:** `dotnet build` → **0 Warning, 0 Error** (không dead-code — 2 method cũ đã xóa, `ReadOrderSnAsync`
+vẫn dùng); `dotnet test --no-build` → **390 pass, 0 fail**. Không WDAC chặn. Chỉ đụng `ShopeeLoginService.cs`.
+KHÔNG commit. CHƯA smoke live nhánh này.

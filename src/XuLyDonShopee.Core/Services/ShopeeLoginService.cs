@@ -2118,24 +2118,17 @@ public class ShopeeLoginService
                 // Dừng "đọc trang" + chờ danh sách render.
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
 
-                // 2) Tìm đơn ĐẦU TIÊN. Không có card nào (list rỗng / "No Data") → NoOrder.
-                var card = await FindFirstOrderCardAsync(page, 10000, ct).ConfigureAwait(false);
-                if (card is null)
+                // 2) QUÉT TẤT CẢ đơn trong danh sách → lấy đơn ĐẦU TIÊN CÓ nút "Chuẩn bị hàng" (đơn đầu có
+                //    thể đã arrange / trạng thái khác, KHÔNG có nút này). Không đơn nào cần xử lý → NoOrder.
+                var (card, prepareBtn, orderCode) =
+                    await FindFirstProcessableOrderAsync(page, 15000, L, ct).ConfigureAwait(false);
+                if (card is null || prepareBtn is null)
                 {
-                    L("Không còn đơn để xử lý.");
+                    L("Không còn đơn nào cần Chuẩn bị hàng.");
                     return ArrangeShipmentResult.NoOrder;
                 }
 
-                // Lấy mã đơn (đặt tên file phiếu). Không có → dùng job_id trích từ URL phiếu sau.
-                var orderCode = ShopeeShippingNav.ExtractOrderCode(await ReadOrderSnAsync(card).ConfigureAwait(false));
-
-                // 3) Bấm "Chuẩn bị hàng" trong card đó.
-                var prepareBtn = await FindPrepareButtonAsync(card).ConfigureAwait(false);
-                if (prepareBtn is null)
-                {
-                    return ArrangeShipmentResult.PrepareNotFound;
-                }
-
+                // 3) Bấm "Chuẩn bị hàng" trong đơn đó (kiểu người, verified).
                 bool clicked;
                 (mx, my, clicked) = await TryHumanClickVisibleAsync(page, prepareBtn, mx, my, rng, ct).ConfigureAwait(false);
                 if (!clicked)
@@ -2681,38 +2674,61 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Dò card đơn ĐẦU TIÊN trong danh sách, poll tới hết <paramref name="timeoutMs"/>. Thử:
-        /// (a) <c>a.order-card[data-testid='order-item']</c>; (b) <c>[data-testid='order-item']</c>;
-        /// (c) <c>.order-card</c>. Chỉ nhận card đang hiển thị. Không có card nào (list rỗng / "No Data") →
-        /// <c>null</c>.
+        /// QUÉT TẤT CẢ đơn trong danh sách "Tất cả" → trả đơn ĐẦU TIÊN CÓ nút "Chuẩn bị hàng" đang hiển thị
+        /// (kèm nút đó + mã đơn), poll tới hết <paramref name="timeoutMs"/> (danh sách render dần). Lấy toàn
+        /// bộ card bằng selector đầu tiên ra &gt;0 phần tử (<c>[data-testid='order-item']</c> → <c>a.order-card</c>
+        /// → <c>.order-card</c>). Nhận diện đơn cần xử lý bằng <b>TEXT nút</b> ("chuẩn bị hàng" qua
+        /// <see cref="ShopeeShippingNav.IsPrepareOrderButtonText"/>) — KHÔNG dựa <c>data-testid</c> theo vị trí
+        /// (đơn trạng thái khác có thể có nút KHÁC ở cùng vị trí). Chỉ nhận nút có bounding box. Log số đơn
+        /// thấy được (giúp smoke biết app có thấy đơn không). Danh sách rỗng / không đơn nào có "Chuẩn bị
+        /// hàng" → <c>(null, null, "")</c>.
         /// </summary>
-        private static async Task<IElementHandle?> FindFirstOrderCardAsync(IPage page, int timeoutMs, CancellationToken ct)
+        private static async Task<(IElementHandle? Card, IElementHandle? PrepareBtn, string OrderCode)>
+            FindFirstProcessableOrderAsync(IPage page, int timeoutMs, Action<string> L, CancellationToken ct)
         {
-            string[] selectors =
-            {
-                "a.order-card[data-testid='order-item']",
-                "[data-testid='order-item']",
-                ".order-card",
-            };
-
+            string[] cardSelectors = { "[data-testid='order-item']", "a.order-card", ".order-card" };
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            int lastCount = -1;
             do
             {
                 ct.ThrowIfCancellationRequested();
-                foreach (var sel in selectors)
+                try
                 {
-                    var el = await FirstVisibleByBoxAsync(page, sel, ct).ConfigureAwait(false);
-                    if (el is not null)
+                    // Lấy TẤT CẢ card đơn (dùng selector đầu tiên ra >0 phần tử).
+                    IReadOnlyList<IElementHandle> cards = System.Array.Empty<IElementHandle>();
+                    foreach (var sel in cardSelectors)
                     {
-                        return el;
+                        var found = await page.QuerySelectorAllAsync(sel).ConfigureAwait(false);
+                        if (found.Count > 0)
+                        {
+                            cards = found;
+                            break;
+                        }
+                    }
+                    if (cards.Count != lastCount)
+                    {
+                        L($"Thấy {cards.Count} đơn trong danh sách.");
+                        lastCount = cards.Count;
+                    }
+
+                    // Duyệt: đơn ĐẦU TIÊN có nút TEXT "chuẩn bị hàng" (chỉ nhận nút có bounding box).
+                    foreach (var card in cards)
+                    {
+                        var btn = await FindButtonByTextAsync(card, ShopeeShippingNav.IsPrepareOrderButtonText).ConfigureAwait(false);
+                        if (btn is not null && await btn.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                        {
+                            var code = ShopeeShippingNav.ExtractOrderCode(await ReadOrderSnAsync(card).ConfigureAwait(false));
+                            return (card, btn, code);
+                        }
                     }
                 }
+                catch { /* chưa render / selector không hợp lệ — thử vòng sau */ }
 
                 await Task.Delay(400, ct).ConfigureAwait(false);
             }
             while (DateTime.UtcNow < deadline);
 
-            return null;
+            return (null, null, string.Empty);
         }
 
         /// <summary>Đọc InnerText của ô <c>.order-sn</c> trong card (để trích mã đơn). Không có → <c>null</c>.</summary>
@@ -2725,38 +2741,6 @@ public class ShopeeLoginService
                 {
                     return await sn.InnerTextAsync().ConfigureAwait(false);
                 }
-            }
-            catch { /* bỏ qua */ }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Dò nút "Chuẩn bị hàng" trong card đơn: (a) <c>button[data-testid='action-button-2']</c>;
-        /// (b) fallback button trong <c>.order-actions</c> khớp <see cref="ShopeeShippingNav.IsPrepareOrderButtonText"/>;
-        /// (c) fallback mọi button trong card khớp text. Không thấy → <c>null</c>.
-        /// </summary>
-        private static async Task<IElementHandle?> FindPrepareButtonAsync(IElementHandle card)
-        {
-            try
-            {
-                var btn = await card.QuerySelectorAsync("button[data-testid='action-button-2']").ConfigureAwait(false);
-                if (btn is not null)
-                {
-                    return btn;
-                }
-
-                var actions = await card.QuerySelectorAsync(".order-actions").ConfigureAwait(false);
-                if (actions is not null)
-                {
-                    var found = await FindButtonByTextAsync(actions, ShopeeShippingNav.IsPrepareOrderButtonText).ConfigureAwait(false);
-                    if (found is not null)
-                    {
-                        return found;
-                    }
-                }
-
-                return await FindButtonByTextAsync(card, ShopeeShippingNav.IsPrepareOrderButtonText).ConfigureAwait(false);
             }
             catch { /* bỏ qua */ }
 
