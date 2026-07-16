@@ -31,10 +31,12 @@ public partial class App : Application
 
             desktop.MainWindow = mainWindow;
 
-            // Thoát app → dừng TẤT CẢ phiên (kill hết Brave, không để tiến trình mồ côi giữ khóa hồ sơ).
-            // Chờ đồng bộ tại đây để đảm bảo Brave chết trước khi tiến trình app kết thúc.
+            // Thoát app → dừng vòng chạy tự động TRƯỚC (không mở thêm phiên mới), rồi dừng TẤT CẢ phiên (kill
+            // hết Brave, không để tiến trình mồ côi giữ khóa hồ sơ). Chờ đồng bộ để Brave chết trước khi thoát.
             desktop.ShutdownRequested += (_, _) =>
             {
+                try { services.AutoRun.StopAsync().GetAwaiter().GetResult(); }
+                catch { /* bỏ qua khi thoát */ }
                 try { services.Sessions.StopAllAsync().GetAwaiter().GetResult(); }
                 catch { /* bỏ qua khi thoát */ }
             };

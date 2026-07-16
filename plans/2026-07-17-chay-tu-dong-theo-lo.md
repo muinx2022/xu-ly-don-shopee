@@ -1,7 +1,11 @@
 # Plan: Mục "Chạy tự động" — chạy theo lô tự động (config riêng), lặp liên tục
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** chờ (làm SAU khi `2026-07-17-nut-sync-kiem-tra-tu-mo-phien.md` + `2026-07-17-nut-sync-kiem-tra-hang-loat.md` merge — tái dùng luồng per-account "mở phiên → chờ sẵn sàng → hành động")
+- **Trạng thái:** hoàn thành (chờ người dùng smoke — đặt N=1 M=1 bật Sync tắt Xử lý để thử nhanh)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus làm: `AutoRunService` độc lập (API công khai Sessions.Start/Stop/IsRunning + poll `ReadyForActions`, KHÔNG đụng VM), vòng lặp lô N song song → Process/Sync (theo cờ) → Check (luôn) → đóng phiên do-mình-mở → nghỉ M → lặp; config 4 khóa vào bảng `settings` sẵn có (`AutoRunSettings.Normalize` kẹp [1,20]/[1,1440]); mục nav "Chạy tự động" index 2 (dời Proxy→3/Cài đặt→4); `AutoRunBatcher`/`AutoRunPlan` thuần + test. Panel đối kháng giữ 1 lỗi CAO (Fable tự đọc xác nhận): Dừng treo vô thời hạn khi autorun chạy hành động dài trên phiên NGƯỜI DÙNG tự mở (không đóng được) → Opus vá: (1a) `StopAsync` chờ loop có timeout 8s; (1b) autorun BỎ QUA tài khoản đang có phiên tay (chỉ thao tác phiên do mình mở → CloseAllOpenedByMe đóng được hết → không kẹt) + (2) kẹp MAX N/M chống tràn Task.Delay/mở quá nhiều Brave. Build Debug+Release 0 warning + 518/518 test. Smoke: CHỜ NGƯỜI DÙNG.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
