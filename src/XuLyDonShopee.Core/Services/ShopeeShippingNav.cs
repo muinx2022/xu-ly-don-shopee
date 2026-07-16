@@ -174,6 +174,11 @@ public static class ShopeeShippingNav
     public static bool IsAllOrdersText(string? s)
         => NormalizeUiText(s) == "tất cả";
 
+    /// <summary>True nếu text (đã chuẩn hóa) BẮT ĐẦU bằng "chờ lấy hàng" — nhãn tab "Chờ lấy hàng" trên
+    /// trang danh sách đơn (nhãn có thể kèm badge số: "Chờ lấy hàng (10)"). Dùng StartsWith vì badge.</summary>
+    public static bool IsToShipTabText(string? s)
+        => NormalizeUiText(s).StartsWith("chờ lấy hàng", System.StringComparison.Ordinal);
+
     /// <summary>True nếu text (đã chuẩn hóa) chính là "chuẩn bị hàng" — nút hành động trong card đơn.</summary>
     public static bool IsPrepareOrderButtonText(string? s)
         => NormalizeUiText(s) == "chuẩn bị hàng";

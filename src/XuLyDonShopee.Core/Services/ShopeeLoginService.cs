@@ -2113,13 +2113,16 @@ public class ShopeeLoginService
                 // Dừng "đọc trang" trước khi bắt đầu.
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
 
-                // 1) Về danh sách đơn "Tất cả" (/portal/sale/order — trang tự vào tab "Chờ xử lý").
+                // 1) Về danh sách đơn (/portal/sale/order).
                 //    Nếu ĐÃ ở trang danh sách (đơn thứ 2+ trong lượt): RELOAD SẠCH bằng GotoAsync thay vì click
                 //    menu SPA. Lý do: điều hướng SPA (click menu) KHÔNG dựng lại DOM → xác modal cũ ("Thông Tin
                 //    Chi Tiết" của đơn trước, bị Vue giữ lại dạng ẩn/bẹp) tích tụ xuyên các đơn, đẩy nút MA lên
                 //    TRƯỚC nút "In phiếu giao" thật → bước in kẹt (đơn đầu lượt DOM sạch nên luôn ngon). GotoAsync
                 //    = người gõ URL/F5 → DOM sạch, mỗi đơn khởi đầu sạch. URL khác trang danh sách → vẫn về bằng
                 //    GoToAllOrdersAsync (click menu kiểu người).
+                //    LƯU Ý: reload/goto đưa Shopee về tab mặc định "Tất cả" (KHÔNG nhớ tab đang chọn như điều
+                //    hướng SPA) → sau khi tới trang phải CLICK sang tab "Chờ lấy hàng" (EnsureToShipTabAsync)
+                //    mới quét, kẻo đơn cần "Chuẩn bị hàng" bị đẩy khỏi trang 1 của "Tất cả" khi shop đông đơn.
                 L("Về danh sách đơn (Tất cả)...");
                 if (ShopeeShippingNav.IsAllOrdersHref(page.Url))
                 {
@@ -2142,6 +2145,11 @@ public class ShopeeLoginService
                 {
                     return ArrangeShipmentResult.OrdersPageNotOpened;
                 }
+
+                // 1b) Reload/goto đưa về tab mặc định "Tất cả" → click sang tab "Chờ lấy hàng" trước khi quét
+                //     (best-effort: không thấy tab / không đổi được thì quét tab hiện tại, KHÔNG chặn xử lý
+                //     đơn). Điểm hội tụ của CẢ nhánh reload lẫn nhánh GoToAllOrdersAsync.
+                (mx, my) = await EnsureToShipTabAsync(page, mx, my, rng, L, ct).ConfigureAwait(false);
 
                 // Dừng "đọc trang" + chờ danh sách render.
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false);
@@ -2870,6 +2878,125 @@ public class ShopeeLoginService
 
             await WaitAllOrdersPageAsync(page, 15000, ct).ConfigureAwait(false);
             return (mx, my);
+        }
+
+        /// <summary>
+        /// Đảm bảo trang danh sách đơn đang ở tab "Chờ lấy hàng" (BEST-EFFORT — thêm 1 click). Reload/goto
+        /// đưa Shopee về tab mặc định "Tất cả" → đơn cần "Chuẩn bị hàng" (nằm ở tab "Chờ lấy hàng") có thể
+        /// bị đẩy khỏi trang 1 của "Tất cả" khi shop đông đơn → app báo nhầm hết đơn. MỌI nhánh fail chỉ LOG
+        /// rồi ĐI TIẾP (quét tab hiện tại) — KHÔNG ném; chỉ hủy (OperationCanceledException) mới ném xuyên.
+        /// Re-query phần tử tab TƯƠI mỗi lượt poll (thanh tab re-render khi chuyển tab — chống stale handle);
+        /// đọc trạng thái active bằng evaluate CHỈ-ĐỌC; đã active → về ngay KHÔNG click (Shopee đôi khi nhớ
+        /// tab). Chưa active → click kiểu người (hit-test) rồi chờ active + settle danh sách vẽ lại. Trả vị
+        /// trí chuột mới.
+        /// </summary>
+        private static async Task<(double X, double Y)> EnsureToShipTabAsync(
+            IPage page, double mx, double my, Random rng, Action<string> L, CancellationToken ct)
+        {
+            // 1) Tìm phần tử tab "Chờ lấy hàng" (poll ≤ 10s, ~400ms/lượt, RE-QUERY tươi mỗi lượt — không giữ
+            //    handle qua lượt). testid l1-tab-toship là khóa chính; text StartsWith là fallback.
+            IElementHandle? tabEl = null;
+            var findDeadline = DateTime.UtcNow.AddMilliseconds(10000);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                tabEl = await FindToShipTabAsync(page, ct).ConfigureAwait(false);
+                if (tabEl is not null)
+                {
+                    break;
+                }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < findDeadline);
+
+            if (tabEl is null)
+            {
+                L("Không thấy tab Chờ lấy hàng — quét tab hiện tại.");
+                return (mx, my);
+            }
+
+            // 2) Đã active? (evaluate CHỈ-ĐỌC) → về ngay, không log, không click.
+            if (await IsToShipTabActiveAsync(tabEl).ConfigureAwait(false))
+            {
+                return (mx, my);
+            }
+
+            // 3) Chưa active → click kiểu người (hit-test). Click không được → cảnh báo, vẫn đi tiếp.
+            bool clicked;
+            (mx, my, clicked) = await TryHumanClickVisibleAsync(page, tabEl, mx, my, rng, ct).ConfigureAwait(false);
+            if (!clicked)
+            {
+                L("Chưa chuyển được sang tab Chờ lấy hàng — quét tab hiện tại.");
+                return (mx, my);
+            }
+
+            L("Chuyển sang tab Chờ lấy hàng.");
+
+            // 4) Chờ tab active ≤ 5s (~300ms/lượt, re-query TƯƠI + đọc lại class mỗi lượt — thanh tab
+            //    re-render khi chuyển tab). Active → chờ settle 800–1500ms (danh sách vẽ lại) rồi về. Hết 5s
+            //    chưa active → cảnh báo, vẫn đi tiếp (quét tab hiện tại).
+            var activeDeadline = DateTime.UtcNow.AddMilliseconds(5000);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                var fresh = await FindToShipTabAsync(page, ct).ConfigureAwait(false);
+                if (fresh is not null && await IsToShipTabActiveAsync(fresh).ConfigureAwait(false))
+                {
+                    await Task.Delay(rng.Next(800, 1500), ct).ConfigureAwait(false);
+                    return (mx, my);
+                }
+
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < activeDeadline);
+
+            L("Chưa chuyển được sang tab Chờ lấy hàng — quét tab hiện tại.");
+            return (mx, my);
+        }
+
+        /// <summary>
+        /// Dò phần tử tab "Chờ lấy hàng" trên thanh tab danh sách đơn (MỘT lần, query TƯƠI — poll do người
+        /// gọi). Ưu tiên <c>[data-testid='l1-tab-toship']</c> (khóa chính, từ DOM thật); fallback duyệt mọi
+        /// <c>.tab-label</c> có InnerText khớp <see cref="ShopeeShippingNav.IsToShipTabText"/> (StartsWith,
+        /// chịu badge số). Chỉ nhận phần tử đang hiển thị (có bounding box). Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindToShipTabAsync(IPage page, CancellationToken ct)
+        {
+            var el = await FirstVisibleByBoxAsync(page, "[data-testid='l1-tab-toship']", ct).ConfigureAwait(false);
+            if (el is not null)
+            {
+                return el;
+            }
+
+            try
+            {
+                var labels = await page.QuerySelectorAllAsync(".tab-label").ConfigureAwait(false);
+                foreach (var lb in labels)
+                {
+                    if (ShopeeShippingNav.IsToShipTabText(await lb.InnerTextAsync().ConfigureAwait(false))
+                        && await lb.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                    {
+                        return lb;
+                    }
+                }
+            }
+            catch { /* chưa render / selector không hợp lệ — người gọi thử vòng sau */ }
+
+            return null;
+        }
+
+        /// <summary>Tab "Chờ lấy hàng" đang active? Evaluate CHỈ-ĐỌC: phần tử tổ tiên gần nhất
+        /// <c>.eds-tabs__nav-tab</c> có class <c>active</c>. Lỗi / handle detached → <c>false</c>.</summary>
+        private static async Task<bool> IsToShipTabActiveAsync(IElementHandle tabEl)
+        {
+            try
+            {
+                return await tabEl.EvaluateAsync<bool>(
+                    "el => { const t = el.closest('.eds-tabs__nav-tab'); return !!t && t.classList.contains('active'); }")
+                    .ConfigureAwait(false);
+            }
+            catch { return false; }
         }
 
         /// <summary>

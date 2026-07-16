@@ -1,7 +1,7 @@
 # Plan: Sau khi vào trang danh sách đơn, đảm bảo đang ở tab "Chờ lấy hàng" (thêm 1 click)
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng smoke)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -87,4 +87,6 @@ Nhóm Theory cho `IsToShipTabText`: khớp `"Chờ lấy hàng"`, `"Chờ lấy 
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus thực thi đủ A/B/C: `IsToShipTabText` (StartsWith "chờ lấy hàng" sau chuẩn hóa, chịu badge) + Theory 8 ca; `EnsureToShipTabAsync` (+`FindToShipTabAsync` ưu tiên testid `l1-tab-toship` fallback `.tab-label` khớp text, +`IsToShipTabActiveAsync` đọc class `active` trên `.eds-tabs__nav-tab`) — poll tìm ≤10s, đã active thì thôi, chưa thì click kiểu người + chờ active ≤5s + settle, mọi nhánh fail chỉ log (best-effort), OCE ném xuyên; gọi đúng 1 chỗ ở bước 1 `ProcessFirstOrderAsync` (điểm hội tụ cả nhánh reload lẫn click menu). Khác plan (đã duyệt): fallback chỉ dùng `.tab-label` để đồng nhất closest khi đọc active.
+
+Nghiệm thu (Fable): tự build 0 warning + 400/400 test xanh; panel rà soát đối kháng 2/3 phiếu — 0 finding được giữ (2 phát hiện thô đều bị bác). Smoke thật: CHỜ NGƯỜI DÙNG — kỳ vọng sau mỗi reload log có "Chuyển sang tab Chờ lấy hàng." (hoặc im lặng nếu đã đúng tab), số đơn quét khớp tab.

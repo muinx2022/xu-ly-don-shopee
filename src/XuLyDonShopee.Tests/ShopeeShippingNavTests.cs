@@ -276,6 +276,21 @@ public class ShopeeShippingNavTests
         Assert.Equal(expected, ShopeeShippingNav.IsAllOrdersText(input));
     }
 
+    // ===== IsToShipTabText: BẮT ĐẦU bằng "chờ lấy hàng" (nhãn tab có thể kèm badge số "(10)") =====
+    [Theory]
+    [InlineData("Chờ lấy hàng", true)]
+    [InlineData("Chờ lấy hàng (10)", true)]           // kèm badge số
+    [InlineData("  chờ  lấy  hàng \n(3)", true)]      // space thừa + xuống dòng + badge
+    [InlineData("Tất cả", false)]
+    [InlineData("Đang giao", false)]
+    [InlineData("Chờ xác nhận", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsToShipTabText_BatDauChoLayHang(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsToShipTabText(input));
+    }
+
     // ===== IsPrepareOrderButtonText =====
     [Theory]
     [InlineData("Chuẩn bị hàng", true)]
