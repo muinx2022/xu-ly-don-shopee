@@ -1,7 +1,7 @@
 # Plan: Gọn giao diện màn Tài khoản — bỏ trường thừa, log xuống dưới nền đen, danh sách dạng lưới + nút icon
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge về master, chờ người dùng xem bằng mắt)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
 
 ## 1. Bối cảnh & mục tiêu
@@ -81,4 +81,6 @@ Yêu cầu (nguyên văn người dùng, 2 tin nhắn):
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus (worktree) làm đủ A/B/C trong 1 file `AccountsView.axaml`: layout Grid 2 hàng — log xuống đáy toàn ngang (nền `#0F1113`, chữ `#EDEDED` Consolas 11, `ListBoxItem` Padding/Margin/MinHeight=0 để dòng sát nhau, giữ `x:Name="LogList"` cho auto-scroll, nút Xóa style tối `logClear`, LogPath 1 dòng); form bỏ Số điện thoại + nguyên Card Ghi chú/Trạng thái/Ngày (VM giữ nguyên property), Tên đăng nhập + Mật khẩu cùng hàng, spacing gọn, badge pill trạng thái giữ; danh sách 4 nút icon `✓ ► ■ ✕` (glyph text-only tránh emoji màu) + lưới phẳng `[ ] tên` + chấm trạng thái/ToShipText. Bổ sung theo yêu cầu thêm: tài khoản đang mở cửa sổ có mũi tên `►` xanh trước tên + tên `#2E7D32` SemiBold qua `Classes.running` (màu đặt trong style để override được). Style đều CỤC BỘ trong UserControl — không đụng style chung.
+
+Nghiệm thu (Fable): đọc toàn bộ file mới + tự build/test trong worktree (392/392) và sau merge trên cây chính (400/400, 0 warning); grep đủ 15 binding Command/SearchText, không còn binding trường đã bỏ. Panel đối kháng BỎ QUA có chủ đích cho việc này: thay đổi thuần khai báo UI đã được XAML compiler + compiled bindings kiểm, phần thẩm mỹ chỉ người dùng quyết được. Merge `worktree-agent-acfe7fca2ffa79950` (2 commit) → master `eae85d4`. Smoke thị giác: CHỜ NGƯỜI DÙNG mở app.
