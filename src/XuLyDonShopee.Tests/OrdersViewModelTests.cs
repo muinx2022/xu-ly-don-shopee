@@ -190,4 +190,31 @@ public class OrdersViewModelTests
         Assert.Equal(OrdersViewModel.AllStatusesLabel, vm.SelectedStatus);
         Assert.Equal("B1", Assert.Single(vm.Rows).OrderSn);
     }
+
+    // ===== Link "In phiếu": SlipPath suy từ order_sn phải KHỚP nơi tải phiếu (cùng hằng thư mục + SanitizeFileName) =====
+    [Theory]
+    [InlineData("260715ABC", "260715ABC.pdf")]      // mã đơn sạch → giữ nguyên
+    [InlineData("SN/1:2*3", "SN_1_2_3.pdf")]        // ký tự lạ (/ : *) → '_' đúng như SanitizeFileName lúc lưu
+    [InlineData("  A B  ", "A_B.pdf")]              // khoảng trắng đầu/cuối cắt, giữa → '_'
+    public void SlipPath_SuyTuOrderSn_KhopThuMucVaSanitize(string orderSn, string expectedFileName)
+    {
+        var row = new OrderRowViewModel(new OrderRow { OrderSn = orderSn }, "lbl");
+        var expected = System.IO.Path.Combine(ShopeeShippingNav.SlipDownloadDir, expectedFileName);
+        Assert.Equal(expected, row.SlipPath);
+    }
+
+    [Fact]
+    public void OpenSlip_ThieuFile_BaoQuaNotify_KhongNem_KhongMoApp()
+    {
+        // order_sn duy nhất → file phiếu chắc chắn KHÔNG tồn tại → không Process.Start (không mở app PDF trong test).
+        var orderSn = "__no_slip_" + Guid.NewGuid().ToString("N");
+        string? msg = null;
+        var row = new OrderRowViewModel(new OrderRow { OrderSn = orderSn }, "lbl", m => msg = m);
+
+        row.OpenSlipCommand.Execute(null); // reference compile-time: chứng minh [RelayCommand] sinh OpenSlipCommand
+
+        Assert.NotNull(msg);
+        Assert.Contains("Chưa có file phiếu", msg!);
+        Assert.Contains(orderSn, msg!);
+    }
 }

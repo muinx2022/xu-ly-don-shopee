@@ -246,6 +246,13 @@ public static class ShopeeShippingNav
     }
 
     /// <summary>
+    /// Thư mục lưu file phiếu giao PDF khi xử lý đơn (tên file = <see cref="SanitizeFileName"/>(order_sn) + ".pdf").
+    /// Hằng dùng CHUNG cho cả nơi TẢI phiếu (<c>ProcessFirstOrderAsync</c>/<c>SaveSlipAsync</c>) và nơi MỞ phiếu ở
+    /// màn "Đơn hàng" (<c>OrderRowViewModel.SlipPath</c>) — hai nơi phải trỏ CÙNG chỗ. Đổi thư mục thì đổi ở đây.
+    /// </summary>
+    public const string SlipDownloadDir = @"D:\Phieu-giao-hang";
+
+    /// <summary>
     /// Làm sạch chuỗi để đặt <b>tên file</b> phiếu: giữ chữ/số/<c>-</c>/<c>_</c>, thay ký tự khác (dấu cách,
     /// <c>/ \ : * ? " &lt; &gt; |</c>...) bằng <c>_</c>, rồi cắt <c>_</c> thừa ở hai đầu. Null/rỗng/chỉ toàn
     /// ký tự lạ → <c>"phieu"</c> (không bao giờ trả tên rỗng).
