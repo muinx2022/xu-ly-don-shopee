@@ -416,7 +416,8 @@ public partial class AccountSession : ObservableObject, IAccountSession
                 return;
             }
 
-            // Random riêng cho nhịp watchdog: jitter 9–11' (~10') để tránh trùng đều mốc xoay 30' của KiotProxy.
+            // Random riêng cho nhịp watchdog: jitter 2–3' (kiểm proxy thường xuyên để proxy chết được phát hiện
+            // & đổi trong vài phút — tránh trang bán hàng chết tới ~10' rồi người dùng phải Dừng/mở lại tay).
             var proxyRng = new Random();
             bool firstOpen = true;
             // Chốt chặn TUYỆT ĐỐI: cap an toàn 12h tính từ ĐẦU phiên, áp cho MỌI lần relaunch (KHÔNG reset mỗi
@@ -492,8 +493,8 @@ public partial class AccountSession : ObservableObject, IAccountSession
                     bool firstOrderCheck = true;
                     // Cần 0 cửa sổ ở 2 vòng poll LIÊN TIẾP mới coi là đã đóng (tránh thoát nhầm lúc chuyển trang).
                     int zeroPageStreak = 0;
-                    // Nhịp watchdog proxy: kiểm proxy đang gán còn sống không, jitter 9–11' (~10').
-                    var nextProxyCheck = DateTime.UtcNow.AddSeconds(proxyRng.Next(540, 660));
+                    // Nhịp watchdog proxy: kiểm proxy đang gán còn sống không, jitter 2–3' (hồi nhanh khi proxy xoay).
+                    var nextProxyCheck = DateTime.UtcNow.AddSeconds(proxyRng.Next(120, 180));
 
                     while (!session.IsClosed && DateTime.UtcNow < hardCap && !ct.IsCancellationRequested)
                     {
@@ -590,7 +591,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
                                 _navigating = false;
                             }
 
-                            nextProxyCheck = DateTime.UtcNow.AddSeconds(proxyRng.Next(540, 660));
+                            nextProxyCheck = DateTime.UtcNow.AddSeconds(proxyRng.Next(120, 180));
                             if (relaunchForProxy)
                             {
                                 SetStatus(SessionState.Running, "Proxy cũ chết — đang đổi proxy, mở lại trình duyệt...");
