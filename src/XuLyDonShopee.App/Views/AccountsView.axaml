@@ -239,10 +239,10 @@
 
                     <!-- Khối chi tiết -->
                     <ScrollViewer IsVisible="{Binding IsEditing}">
-                        <!-- MaxWidth trần + Stretch: field giãn theo bề rộng cột chi tiết tới trần 920 (hết
-                             khoảng trống phải), bề rộng KHÔNG phụ thuộc nội dung từng tài khoản → hàng nút và
-                             các card KHÔNG bị xê dịch khi chuyển giữa các tài khoản. -->
-                        <StackPanel MaxWidth="920" HorizontalAlignment="Stretch"
+                        <!-- MaxWidth trần 760 + neo TRÁI: form gọn vừa mắt trên màn Full HD (yêu cầu người dùng
+                             17/7 — trần 920 cũ quá rộng), bề rộng KHÔNG phụ thuộc nội dung từng tài khoản →
+                             hàng nút và các card KHÔNG bị xê dịch khi chuyển giữa các tài khoản. -->
+                        <StackPanel MaxWidth="760" HorizontalAlignment="Left"
                                     Margin="24,16,32,20">
 
                         <!-- Header hàng -->
