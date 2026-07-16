@@ -181,8 +181,11 @@ public partial class AccountSession : ObservableObject, IAccountSession
     /// <summary>
     /// Xử lý đơn: trong phiên đang chạy, điều hướng KIỂU NGƯỜI tới "Cài Đặt Vận Chuyển" → tab "Địa Chỉ"
     /// (bước 1), rồi <b>đặt địa chỉ lấy hàng</b> theo tỉnh mặc định của tài khoản
-    /// (<see cref="AccountsViewModel.DefaultPickupAddress"/> nếu chưa chọn) (bước 2). Bật cờ
-    /// <see cref="_navigating"/> bao trùm cả 2 bước để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn
+    /// (<see cref="AccountsViewModel.DefaultPickupAddress"/> nếu chưa chọn) (bước 2), rồi <b>xử lý LẦN LƯỢT
+    /// MỌI đơn</b> cần "Chuẩn bị hàng" (bước 3): lặp <c>ProcessFirstOrderAsync</c> (arrange → CHỜ nút In phiếu
+    /// giao tới 5' → lưu phiếu → đóng modal) TỚI KHI hết đơn. ĐƠN LỖI thì ghi log + <b>BỎ QUA, chạy tiếp đơn
+    /// kế</b>; chỉ dừng khi lỗi 3 đơn LIÊN TIẾP (chống lặp vô hạn) hoặc chạm chốt chặn 200 đơn. Bật cờ
+    /// <see cref="_navigating"/> bao trùm cả 3 bước để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn
     /// giữa chừng (phá thao tác). Graceful: phiên chưa chạy / bị hủy / lỗi → false, KHÔNG ném.
     /// </summary>
     public async Task<bool> ProcessOrdersAsync()
@@ -261,45 +264,78 @@ public partial class AccountSession : ObservableObject, IAccountSession
 
             // Bước 3: xử lý LẦN LƯỢT MỌI đơn — lặp ProcessFirstOrderAsync (mỗi vòng: điều hướng "Tất cả" →
             // quét đơn đầu có "Chuẩn bị hàng" → arrange → In phiếu → đóng modal) TỚI KHI hết đơn (NoOrder).
-            // Đơn đã arrange MẤT nút "Chuẩn bị hàng" nên vòng tự dừng khi mọi đơn xử lý xong. Mọi bước ghi log
-            // qua ActivityLog (panel + file) để smoke live thấy rõ.
+            // Đơn đã arrange MẤT nút "Chuẩn bị hàng" nên vòng tự dừng khi mọi đơn xử lý xong. ĐƠN LỖI thì GHI
+            // LOG + BỎ QUA + chạy tiếp đơn kế (KHÔNG dừng cả vòng) — chỉ dừng khi LỖI 3 ĐƠN LIÊN TIẾP (chống
+            // lặp vô hạn). Mọi bước ghi log qua ActivityLog (panel + file) để smoke live thấy rõ.
             var log = (Action<string>)(m => _services.Log.Append(_logLabel, m));
             const int MaxOrders = 200;              // chốt chặn an toàn (tránh lặp vô hạn nếu 1 đơn kẹt ở "Chuẩn bị hàng")
             var loopRng = new Random();
-            int done = 0;
+            int done = 0;                            // số đơn xử lý THÀNH CÔNG
+            int failCount = 0;                       // số đơn BỎ QUA vì lỗi
+            int consecutiveFails = 0;                // số đơn lỗi LIÊN TIẾP (reset khi có 1 đơn Ok)
+            bool stoppedByConsecutiveFails = false;
             ArrangeShipmentResult last = ArrangeShipmentResult.NoOrder;
             while (done < MaxOrders)
             {
-                StatusText = $"Đang xử lý đơn thứ {done + 1}...";
+                StatusText = $"Đang xử lý đơn thứ {done + failCount + 1}...";
                 last = await s.ProcessFirstOrderAsync(@"D:\Phieu-giao-hang", log, tok).ConfigureAwait(false);
-                if (last == ArrangeShipmentResult.NoOrder)
+
+                // Quyết định vòng lặp (hàm thuần, test được): Ok → reset chuỗi lỗi; NoOrder → dừng (hết đơn);
+                // lỗi khác → tăng chuỗi lỗi, dừng khi đạt 3 liên tiếp.
+                var (stop, nextConsecutive) = NextLoopDecision(last, consecutiveFails);
+                consecutiveFails = nextConsecutive;
+
+                if (last == ArrangeShipmentResult.Ok)
                 {
-                    break;                          // hết đơn cần "Chuẩn bị hàng"
+                    done++;
                 }
-                if (last != ArrangeShipmentResult.Ok)
+                else if (last != ArrangeShipmentResult.NoOrder)
                 {
-                    break;                          // lỗi ở 1 đơn (PrintFailed/ConfirmFailed/...) → dừng, báo bước lỗi
+                    // Đơn lỗi: ghi log + bỏ qua, chạy tiếp đơn kế.
+                    failCount++;
+                    log($"Bỏ qua đơn lỗi ({DescribeFailedStep(last)}) — tiếp tục đơn kế.");
                 }
-                done++;
+
+                if (stop)
+                {
+                    stoppedByConsecutiveFails = last != ArrangeShipmentResult.NoOrder;
+                    break;
+                }
+
                 // Dừng ngẫu nhiên kiểu người giữa các đơn.
                 try { await Task.Delay(loopRng.Next(1500, 3500), tok).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
             }
 
-            StatusText = last switch
+            // Tổng kết cuối vòng: ghi CẢ StatusText LẪN ActivityLog (StatusText không vào file log → mất dấu vết).
+            // Thứ tự nhánh QUAN TRỌNG: nhánh "đạt chốt chặn" (last == Ok) phải đứng TRƯỚC nhánh "failCount > 0"
+            // — vì chạm chốt chặn nghĩa là CÒN đơn chưa xử lý, không được để câu "bỏ qua Y đơn lỗi" nuốt mất
+            // thông tin đó làm người dùng tưởng đã hết đơn.
+            string summary;
+            if (stoppedByConsecutiveFails)
             {
-                ArrangeShipmentResult.NoOrder =>
-                    done > 0 ? $"Đã xử lý xong {done} đơn. Không còn đơn nào cần xử lý."
-                             : "Không có đơn nào cần xử lý.",
-                ArrangeShipmentResult.Ok => $"Đã xử lý {done} đơn (đạt chốt chặn {MaxOrders}).", // hiếm khi tới cap
-                ArrangeShipmentResult.OrdersPageNotOpened => $"Đã xử lý {done} đơn; không mở được danh sách đơn.",
-                ArrangeShipmentResult.PrepareNotFound     => $"Đã xử lý {done} đơn; không bấm được Chuẩn bị hàng ở đơn kế.",
-                ArrangeShipmentResult.ShipModalNotOpened  => $"Đã xử lý {done} đơn; không mở được ô Giao Đơn Hàng ở đơn kế.",
-                ArrangeShipmentResult.ConfirmFailed       => $"Đã xử lý {done} đơn; không Xác nhận được ở đơn kế.",
-                ArrangeShipmentResult.DetailModalNotOpened=> $"Đã xử lý {done} đơn; không mở được Thông Tin Chi Tiết ở đơn kế.",
-                ArrangeShipmentResult.PrintFailed         => $"Đã xử lý {done} đơn; không In phiếu giao được ở đơn kế.",
-                _ => $"Đã xử lý {done} đơn; gặp lỗi ở đơn kế — kiểm tra tay trong Brave.",
-            };
+                summary = $"Dừng vì lỗi 3 đơn liên tiếp ({DescribeFailedStep(last)}). Đã xử lý {done} đơn, bỏ qua {failCount} đơn lỗi.";
+            }
+            else if (last == ArrangeShipmentResult.Ok)
+            {
+                // Chạm chốt chặn MaxOrders (còn đơn chưa xử lý) — nêu RÕ để không tưởng đã hết đơn.
+                summary = failCount > 0
+                    ? $"Đã xử lý {done} đơn (đạt chốt chặn {MaxOrders}), bỏ qua {failCount} đơn lỗi."
+                    : $"Đã xử lý {done} đơn (đạt chốt chặn {MaxOrders}).";
+            }
+            else if (failCount > 0)
+            {
+                summary = $"Đã xử lý {done} đơn, bỏ qua {failCount} đơn lỗi.";
+            }
+            else
+            {
+                // Còn lại: NoOrder (hết đơn), failCount == 0 — giữ câu cũ.
+                summary = done > 0
+                    ? $"Đã xử lý xong {done} đơn. Không còn đơn nào cần xử lý."
+                    : "Không có đơn nào cần xử lý.";
+            }
+            StatusText = summary;
+            log(summary);
             return last is ArrangeShipmentResult.NoOrder or ArrangeShipmentResult.Ok || done > 0;
         }
         catch (OperationCanceledException)
@@ -312,6 +348,45 @@ public partial class AccountSession : ObservableObject, IAccountSession
             _navigating = false;
         }
     }
+
+    /// <summary>
+    /// Quyết định vòng lặp xử lý đơn theo kết quả xử lý MỘT đơn (thuần, KHÔNG side-effect → test được):
+    /// <list type="bullet">
+    /// <item><see cref="ArrangeShipmentResult.Ok"/> → KHÔNG dừng, reset chuỗi lỗi liên tiếp về 0.</item>
+    /// <item><see cref="ArrangeShipmentResult.NoOrder"/> → DỪNG (hết đơn), giữ nguyên chuỗi lỗi.</item>
+    /// <item>Lỗi khác → tăng chuỗi lỗi liên tiếp; DỪNG khi đạt <paramref name="maxConsecutiveFails"/>.</item>
+    /// </list>
+    /// Guard 3-liên-tiếp cần vì đơn fail TRƯỚC arrange (PrepareNotFound/ShipModalNotOpened/ConfirmFailed/
+    /// Failed) vẫn còn nút "Chuẩn bị hàng" → vòng sau chọn LẠI chính đơn đó; 3 lần không tiến triển = có vấn
+    /// đề hệ thống, dừng để người xem. (Đơn fail SAU arrange — PrintFailed/DetailModalNotOpened — mất nút
+    /// "Chuẩn bị hàng" nên vòng sau tự sang đơn kế, không lặp.)
+    /// </summary>
+    public static (bool stop, int consecutive) NextLoopDecision(
+        ArrangeShipmentResult last, int consecutiveFails, int maxConsecutiveFails = 3)
+    {
+        if (last == ArrangeShipmentResult.Ok)
+        {
+            return (false, 0);                       // 1 đơn Ok → reset chuỗi lỗi
+        }
+        if (last == ArrangeShipmentResult.NoOrder)
+        {
+            return (true, consecutiveFails);         // hết đơn → dừng
+        }
+        int next = consecutiveFails + 1;
+        return (next >= maxConsecutiveFails, next);  // lỗi → tăng chuỗi; đủ 3 liên tiếp thì dừng
+    }
+
+    /// <summary>Mô tả NGẮN bước lỗi của một đơn (dùng cho log "Bỏ qua đơn lỗi (...)" và câu dừng 3-liên-tiếp).</summary>
+    private static string DescribeFailedStep(ArrangeShipmentResult r) => r switch
+    {
+        ArrangeShipmentResult.OrdersPageNotOpened  => "không mở được danh sách đơn",
+        ArrangeShipmentResult.PrepareNotFound      => "không bấm được Chuẩn bị hàng",
+        ArrangeShipmentResult.ShipModalNotOpened   => "không mở được ô Giao Đơn Hàng",
+        ArrangeShipmentResult.ConfirmFailed        => "không Xác nhận được",
+        ArrangeShipmentResult.DetailModalNotOpened => "không mở được Thông Tin Chi Tiết",
+        ArrangeShipmentResult.PrintFailed          => "không In phiếu giao được",
+        _ => "lỗi không xác định",
+    };
 
     /// <summary>
     /// Kiểm tra đơn NGAY (thủ công): trong phiên đang chạy, về trang chủ Seller (Goto như người gõ URL —

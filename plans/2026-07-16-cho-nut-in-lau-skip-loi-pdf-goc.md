@@ -1,7 +1,7 @@
 # Plan: Chờ vận đơn lâu hơn (5'), bỏ qua đơn lỗi chạy tiếp, lấy PDF phiếu gốc từ blob
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng smoke với đơn thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -80,4 +80,6 @@ Ba mục tiêu của plan này:
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus thực thi đủ A/B/C/D (3 file: `ShopeeLoginService.cs`, `AccountSession.cs`, test mới `AccountSessionLoopTests.cs`): hằng `PrintButtonWaitSeconds=300` + log tiến trình 30s + chẩn đoán nút khi hết hạn (đọc DOM: testid → fallback text chuẩn hóa, via=..., disabled/box/elementFromPoint); vòng `ProcessOrdersAsync` bỏ qua đơn lỗi chạy tiếp, hàm thuần `NextLoopDecision` (Ok reset / NoOrder dừng / 3 lỗi liên tiếp dừng) + `DescribeFailedStep`, tổng kết ghi cả StatusText lẫn ActivityLog; e0 fetch blob PDF gốc (strip fragment, base64 chunk 0x8000, %PDF-check) đứng trước e1, e1 gác `!pdfReal`; 10 ca test mới cho `NextLoopDecision`. Khác plan (đã duyệt): `NextLoopDecision` public static (App không có InternalsVisibleTo); "Đang xử lý đơn thứ N" = done+failCount+1; NextLoopDecision quyết cả nhánh NoOrder.
+
+Nghiệm thu (Fable): tự build 0 warning + 392/392 test xanh; panel rà soát đối kháng 2/3 phiếu chốt 2 lỗi nhỏ → đã sửa và kiểm lại: (1) câu tổng kết khi chạm chốt chặn 200 mà có đơn lỗi giữ chữ "đạt chốt chặn"; (2) diagJs phản chiếu đúng 2 đường tìm nút (testid + text). Build/test lại xanh. Smoke với đơn thật: CHỜ NGƯỜI DÙNG — kỳ vọng: đơn vận đơn chậm được chờ (log 30s) rồi xử lý tiếp; đơn lỗi bị bỏ qua và đơn sau vẫn chạy; `D:\Phieu-giao-hang\<mã đơn>.pdf` là phiếu GỐC (chỉ phiếu, không toolbar/nền đen/cắt mép).

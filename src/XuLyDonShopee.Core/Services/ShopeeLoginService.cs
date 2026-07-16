@@ -120,7 +120,8 @@ public interface ILoginSession : IAsyncDisposable
     /// <b>Bước 3 xử lý đơn — xử lý ĐƠN ĐẦU TIÊN trong danh sách "Tất cả" (tab "Chờ xử lý"):</b> điều hướng
     /// về trang danh sách đơn (<c>/portal/sale/order</c>), lấy đơn đầu tiên → bấm <b>"Chuẩn bị hàng"</b> →
     /// trong modal <b>"Giao Đơn Hàng"</b> chọn <b>"Tôi sẽ tự mang hàng tới Bưu cục"</b> (mặc định đã chọn)
-    /// → bấm <b>"Xác nhận"</b> → chờ modal <b>"Thông Tin Chi Tiết"</b> → bấm <b>"In phiếu giao"</b> → BẮT
+    /// → bấm <b>"Xác nhận"</b> → chờ modal <b>"Thông Tin Chi Tiết"</b> → <b>CHỜ nút "In phiếu giao" bấm được
+    /// tới 5 phút</b> (Shopee tạo mã vận đơn có thể lâu, có log tiến trình 30s) rồi bấm → BẮT
     /// tab phiếu mới, CHỤP màn hình phiếu (PNG) + lưu PDF thật về <paramref name="downloadDir"/> (KHÔNG gửi
     /// lệnh in — lưu để in sau) rồi ĐÓNG tab. <b>Toàn bộ click bằng thao tác kiểu người CÓ HIT-TEST</b> (di chuột cong, click
     /// down→trễ→up, có dừng "đọc trang" ngẫu nhiên; KHÔNG dùng ClickAsync/Fill/native). Mỗi bước gọi
@@ -2084,6 +2085,11 @@ public class ShopeeLoginService
         // URL danh sách đơn "Tất cả" — CHỈ dùng ở fallback cuối (khi không click được link menu kiểu người).
         private const string AllOrdersUrl = "https://banhang.shopee.vn/portal/sale/order";
 
+        // Chờ nút "In phiếu giao" bấm được TỚI 5 phút: Shopee tạo mã vận đơn có thể LÂU (yêu cầu người dùng
+        // 16/7 — 40s cũ không đủ, đơn bị PrintFailed oan). Trong lúc chờ chỉ POLL (không click dồn dập) + log
+        // tiến trình mỗi ~30s để smoke thấy app đang chờ chứ không treo.
+        private const int PrintButtonWaitSeconds = 300;
+
         public async Task<ArrangeShipmentResult> ProcessFirstOrderAsync(
             string downloadDir, Action<string>? log = null, CancellationToken ct = default)
         {
@@ -2183,16 +2189,25 @@ public class ShopeeLoginService
                 // CLICK KIỂU NGƯỜI THẲNG bằng HumanMoveAndClickAsync (chuột cong + down/trễ/up, KHÔNG kiểm
                 // hit-test lần hai — vẫn like-human, KHÔNG native). HumanMoveAndClickAsync không trả cờ
                 // "clicked" → thành công THẬT xác nhận bằng việc TAB PHIẾU mở ra (PHA 2). Tab có thể mở MUỘN
-                // (Shopee gọi API tạo bản in) nên poll MỌI context tới ~40s; chống double-tab bằng cách kiểm
-                // tab đã mở TRƯỚC mỗi lần bấm lại.
+                // (Shopee gọi API tạo bản in) nên poll MỌI context tới PrintButtonWaitSeconds (5'); chống
+                // double-tab bằng cách kiểm tab đã mở TRƯỚC mỗi lần bấm lại. Log tiến trình mỗi ~30s.
                 L("Chờ nút In phiếu giao bấm được (Shopee đang tạo vận đơn)...");
                 var before = _browser.Contexts.SelectMany(c => c.Pages).ToList();
                 IPage? newPage = null;
                 bool clickedPrint = false;
-                var printDeadline = DateTime.UtcNow.AddSeconds(40);
+                var printStart = DateTime.UtcNow;
+                var printDeadline = printStart.AddSeconds(PrintButtonWaitSeconds);
+                var lastPrintProgressLog = printStart;
                 while (newPage is null && DateTime.UtcNow < printDeadline)
                 {
                     ct.ThrowIfCancellationRequested();
+
+                    // Log tiến trình mỗi ~30s (MỘT dòng, không dồn dập) — smoke thấy app đang chờ, không treo.
+                    if ((DateTime.UtcNow - lastPrintProgressLog).TotalSeconds >= 30)
+                    {
+                        lastPrintProgressLog = DateTime.UtcNow;
+                        L($"Vẫn chờ nút In phiếu giao (đã {(int)(DateTime.UtcNow - printStart).TotalSeconds}s) — Shopee đang tạo vận đơn...");
+                    }
 
                     // Tab đã mở từ cú click TRƯỚC? (tránh bấm lại → double-tab). Quét MỌI context (tab có thể
                     // mở ở context/cửa sổ khác).
@@ -2230,9 +2245,46 @@ public class ShopeeLoginService
                 }
                 if (newPage is null)
                 {
+                    // Hết 5' vẫn không có tab phiếu → chẩn đoán trạng thái nút (CHỈ ĐỌC DOM: nút có tồn tại?
+                    // disabled? text? phần tử che tại tâm nút qua elementFromPoint) để lần sau tinh chỉnh —
+                    // best-effort, nuốt lỗi (OCE vẫn ném), chẩn đoán fail KHÔNG được phá luồng.
+                    try
+                    {
+                        // Phản chiếu ĐÚNG đường tìm nút thật của WaitPrintButtonClickableAsync: (a) testid trước;
+                        // (b) fallback quét mọi button theo TEXT chuẩn hóa "in phiếu giao" + phải có bounding box.
+                        const string diagJs = @"() => {
+                            const fmt = (btn, via) => {
+                                const r = btn.getBoundingClientRect();
+                                const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+                                const el = document.elementFromPoint(cx, cy);
+                                const cls = el ? (el.getAttribute('class') || '') : '';
+                                const cover = el ? (el.tagName.toLowerCase() + (cls ? '.' + cls : '')) : '(khong co)';
+                                const txt = (btn.innerText || '').trim().slice(0, 40);
+                                return 'via=' + via + ', disabled=' + btn.disabled
+                                    + ', aria-disabled=' + btn.getAttribute('aria-disabled')
+                                    + ', text=[' + txt + '], box=' + Math.round(r.width) + 'x' + Math.round(r.height)
+                                    + ', elementFromPoint=' + cover;
+                            };
+                            const byId = document.querySelector(""button[data-testid='print-button']"");
+                            if (byId) return fmt(byId, 'testid');
+                            const norm = s => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+                            for (const b of document.querySelectorAll('button')) {
+                                if (norm(b.innerText) === 'in phiếu giao') {
+                                    const r = b.getBoundingClientRect();
+                                    if (r.width > 0 && r.height > 0) return fmt(b, 'text');
+                                }
+                            }
+                            return 'khong thay nut In phieu giao (ca testid lan text)';
+                        }";
+                        var diag = await page.EvaluateAsync<string>(diagJs).ConfigureAwait(false);
+                        L("Chẩn đoán nút In phiếu giao: " + diag);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch { /* chẩn đoán fail không được phá luồng */ }
+
                     L(clickedPrint
                         ? "Đã bấm In phiếu giao nhưng KHÔNG thấy tab phiếu mở ra — kiểm tra tay."
-                        : "Nút In phiếu giao KHÔNG bấm được trong 40s (chưa bấm được lần nào) — kiểm tra tay.");
+                        : $"Nút In phiếu giao KHÔNG bấm được trong {PrintButtonWaitSeconds}s (chưa bấm được lần nào) — kiểm tra tay.");
                     return ArrangeShipmentResult.PrintFailed;
                 }
 
@@ -2290,10 +2342,12 @@ public class ShopeeLoginService
         /// <paramref name="downloadDir"/> (artifact PHỤ) → ĐÓNG tab. <b>KHÔNG gửi lệnh in nào</b> (bỏ theo yêu
         /// cầu — lưu phiếu để in sau). <b>Best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được
         /// arrange). Mọi thao tác trên tab CHỈ ĐỌC DOM (đếm iframe/embed/object + ảnh, screenshot, printToPDF)
-        /// — KHÔNG click, KHÔNG vá/hook JS (quy tắc stealth). PDF thật thử lần lượt: (e1) GET src khung nhúng
-        /// đầu tiên (http[s]) qua <c>APIRequest</c> — %PDF/content-type check; (e2) CDP <c>Page.printToPDF</c>
-        /// (<see cref="LooksPdf"/>-check + ngưỡng <see cref="MinRealSlipPdfBytes"/> chống bản trắng); (e3) GET
-        /// page-URL fallback. Coi là "đã lưu phiếu" khi PNG chụp OK <b>hoặc</b> có PDF ≥ ngưỡng.
+        /// — KHÔNG click, KHÔNG vá/hook JS (quy tắc stealth). PDF thật thử lần lượt: (e0) nếu khung nhúng là
+        /// <c>blob:</c> URL (phiếu PDF GỐC Shopee tạo, nhúng qua trình xem PDF) → <c>fetch</c> blob NGAY trong
+        /// trang → base64 → giải mã (%PDF-check) — ĐÂY là file in chuẩn nhất (chỉ phiếu, đúng khổ); (e1) GET src
+        /// khung nhúng đầu tiên (http[s]) qua <c>APIRequest</c> — %PDF/content-type check; (e2) CDP
+        /// <c>Page.printToPDF</c> (<see cref="LooksPdf"/>-check + ngưỡng <see cref="MinRealSlipPdfBytes"/> chống
+        /// bản trắng); (e3) GET page-URL fallback. Coi là "đã lưu phiếu" khi PNG chụp OK <b>hoặc</b> có PDF ≥ ngưỡng.
         /// </summary>
         private async Task SaveSlipAsync(
             IPage newPage, string downloadDir, string orderCode, Action<string> L, CancellationToken ct)
@@ -2404,6 +2458,10 @@ public class ShopeeLoginService
             var firstHttpSrc = embedSrcs.FirstOrDefault(s =>
                 s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                 || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+            // Src blob ĐẦU TIÊN (bản ĐẦY ĐỦ) — Shopee nhúng phiếu PDF GỐC qua blob: URL (trình xem PDF). Lấy ở
+            // e0 (fetch NGAY trong trang) TRƯỚC http/render vì blob này CHÍNH là file in chuẩn (chỉ phiếu, đúng khổ).
+            var firstBlobSrc = embedSrcs.FirstOrDefault(s =>
+                s.StartsWith("blob:", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
             var logSrc = firstHttpSrc.Length > 0 ? firstHttpSrc : (embedSrcs.Count > 0 ? embedSrcs[0] : string.Empty);
             if (logSrc.Length > 120) logSrc = logSrc.Substring(0, 120);
             var srcInfo = logSrc.Length > 0 ? $" (src={logSrc})" : string.Empty;
@@ -2450,9 +2508,61 @@ public class ShopeeLoginService
             {
                 var pdfPath = Path.Combine(dir, safeName + ".pdf");
 
+                // e0. Nếu khung nhúng là PDF GỐC Shopee tạo (iframe src = blob:...#toolbar=0...): fetch blob NGAY
+                //     TRONG trang (đọc tài nguyên cùng trang — KHÔNG vá/hook) → arrayBuffer → base64 (chunk nhỏ
+                //     tránh tràn call stack btoa) → C# giải mã. Đây là FILE PDF GỐC (chỉ phiếu, đúng khổ in) →
+                //     ƯU TIÊN số 1. blob đã revoke / CSP chặn → JS trả rỗng → rơi xuống e1/e2/e3.
+                if (firstBlobSrc.Length > 0)
+                {
+                    // Cắt fragment (#toolbar=0&navpanes=0) — fetch theo đúng object URL, không mang fragment.
+                    var blobUrl = firstBlobSrc;
+                    int hashIdx = blobUrl.IndexOf('#');
+                    if (hashIdx >= 0) blobUrl = blobUrl.Substring(0, hashIdx);
+
+                    const string fetchBlobJs = @"async (url) => {
+                        try {
+                            const resp = await fetch(url);
+                            const buf = await resp.arrayBuffer();
+                            const bytes = new Uint8Array(buf);
+                            let bin = '';
+                            const chunk = 0x8000;
+                            for (let i = 0; i < bytes.length; i += chunk) {
+                                bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                            }
+                            return btoa(bin);
+                        } catch (e) {
+                            return '';
+                        }
+                    }";
+                    try
+                    {
+                        var b64 = await newPage.EvaluateAsync<string>(fetchBlobJs, blobUrl).ConfigureAwait(false);
+                        byte[]? body = null;
+                        if (!string.IsNullOrEmpty(b64))
+                        {
+                            try { body = Convert.FromBase64String(b64); } catch { body = null; }
+                        }
+                        if (LooksPdf(body))
+                        {
+                            await File.WriteAllBytesAsync(pdfPath, body!, ct).ConfigureAwait(false);
+                            pdfReal = true;
+                            L($"Đã tải phiếu PDF GỐC (blob): {pdfPath} ({body!.Length} bytes).");
+                        }
+                        else
+                        {
+                            L("Fetch blob KHÔNG phải PDF / rỗng (revoke/CSP?) — bỏ, thử GET src/render.");
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        L("Fetch blob chưa được: " + ex.Message);
+                    }
+                }
+
                 // e1. GET src khung nhúng http(s) ĐẦU TIÊN qua context đã đăng nhập. Token phiếu dùng 1 lần →
                 //     GET đúng MỘT lần; CHỈ ghi khi content-type "pdf" HOẶC magic %PDF (không lưu rác).
-                if (firstHttpSrc.Length > 0)
+                if (!pdfReal && firstHttpSrc.Length > 0)
                 {
                     try
                     {
