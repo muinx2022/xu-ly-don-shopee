@@ -1,7 +1,7 @@
 # Plan: Bước lưu phiếu chỉ giữ file PDF — bỏ ảnh chụp màn hình PNG
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge về master)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
 
 ## 1. Bối cảnh & mục tiêu
@@ -45,4 +45,6 @@ Từ khi có e0 (các lượt chạy thật 16:41 / 18:12 / 22:25 ngày 16/7), *
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus (worktree) xóa trọn khối chụp PNG (bước d) + helper `SafeFileLength` mồ côi; bước f chỉ còn điều kiện `pdfReal` với cảnh báo "CHƯA lưu được phiếu PDF"; cập nhật nhất quán mọi doc/log liên quan (interface, doc SaveSlipAsync, const ngưỡng, log e2/b). Grep sạch `ScreenshotAsync|pngSaved|.png|SafeFileLength|PageScreenshotOptions`. Chuỗi e0→e3, chờ nội dung, chẩn đoán DOM, đóng tab, OCE — giữ nguyên.
+
+Nghiệm thu (Fable): đọc từng dòng diff (thuần xóa nhánh + đổi chuỗi, panel đối kháng bỏ qua có chủ đích) + tự build/test trong worktree (400/400 nền cũ) và sau merge trên cây chính (403/403, 0 warning). Merge `565cb50` → master `982a84b`, worktree đã dọn. Smoke: người dùng chạy 1 đơn → chỉ sinh `<mã đơn>.pdf`.
