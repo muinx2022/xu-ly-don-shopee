@@ -115,16 +115,15 @@
             <Setter Property="Foreground" Value="#FFFFFF" />
         </Style>
 
-        <!-- Hàng nút thao tác của FORM chi tiết dạng ICON: chỉ override KÍCH THƯỚC thành nút vuông gọn, GIỮ
-             nền/viền theo class màu đi kèm (accent = nền cam, secondary = viền, accentOutline = viền cam) nên
-             KHÔNG đụng ContentPresenter ở đây. -->
+        <!-- Hàng nút thao tác của FORM chi tiết: nút ICON + NHÃN CHỮ (vd "✓ Lưu"). Chỉ override KÍCH THƯỚC
+             (cao gọn 34; BỎ Width cố định để nút rộng theo nhãn; đệm ngang cho chữ thở), GIỮ nền/viền theo class
+             màu đi kèm (accent = nền cam, secondary = viền, accentOutline = viền cam) nên KHÔNG đụng ContentPresenter. -->
         <Style Selector="Button.formIcon">
-            <Setter Property="Width" Value="38" />
             <Setter Property="Height" Value="34" />
             <Setter Property="MinWidth" Value="0" />
             <Setter Property="MinHeight" Value="0" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="FontSize" Value="13" />
         </Style>
 
     </UserControl.Styles>
@@ -239,11 +238,11 @@
 
                     <!-- Khối chi tiết -->
                     <ScrollViewer IsVisible="{Binding IsEditing}">
-                        <!-- MaxWidth trần 760 + neo TRÁI: form gọn vừa mắt trên màn Full HD (yêu cầu người dùng
-                             17/7 — trần 920 cũ quá rộng), bề rộng KHÔNG phụ thuộc nội dung từng tài khoản →
-                             hàng nút và các card KHÔNG bị xê dịch khi chuyển giữa các tài khoản. -->
-                        <StackPanel MaxWidth="760" HorizontalAlignment="Left"
-                                    Margin="24,16,32,20">
+                        <!-- Form căng NGANG tới trần 1150 rồi CĂN GIỮA phần thừa (Stretch + MaxWidth): trên màn rộng
+                             hơn Full HD không còn mảng trống lớn bên phải; hẹp hơn thì co theo khung. Bề rộng chốt
+                             theo trần/khung (KHÔNG theo nội dung) → hàng nút và card KHÔNG xê dịch khi đổi tài khoản. -->
+                        <StackPanel MaxWidth="1150" HorizontalAlignment="Stretch"
+                                    Margin="24,16,24,20">
 
                         <!-- Header hàng -->
                         <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,22">
@@ -270,39 +269,49 @@
                             </Border>
                         </Grid>
 
-                        <!-- Hàng nút hành động dạng ICON (tooltip giữ nguyên tên + mô tả cũ). Nhóm trái Lưu/Hủy,
-                             nhóm phải Kiểm tra/Sync/Dừng/Xử lý đơn/Mở trang. Class màu giữ nguyên, thêm formIcon để vuông gọn. -->
-                        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,16">
-                            <Button Grid.Column="0" Classes="accent formIcon" Content="✓"
-                                    Command="{Binding SaveCommand}"
-                                    ToolTip.Tip="Lưu thay đổi" />
-                            <Button Grid.Column="1" Classes="secondary formIcon" Content="↶" Margin="8,0,0,0"
-                                    Command="{Binding CancelCommand}"
-                                    ToolTip.Tip="Hủy" />
-                            <!-- Kiểm tra: về trang chủ Seller + đọc số Chờ Lấy Hàng NGAY (không đợi 30'). Bật khi phiên đang chạy. -->
-                            <Button Grid.Column="3" Classes="secondary formIcon" Content="⟳"
-                                    Command="{Binding CheckOrdersCommand}"
-                                    IsEnabled="{Binding CanCheckOrders}"
-                                    ToolTip.Tip="Kiểm tra — Về trang chủ Seller và kiểm tra số đơn Chờ Lấy Hàng ngay (không đợi chu kỳ 30')" />
-                            <!-- Sync Đơn hàng: vào Quản lý đơn hàng tab Tất cả, duyệt mọi trang, lưu đơn về máy. Bật khi phiên đang chạy. -->
-                            <Button Grid.Column="4" Classes="secondary formIcon" Content="⇊" Margin="8,0,0,0"
-                                    Command="{Binding SyncOrdersCommand}"
-                                    IsEnabled="{Binding CanSyncOrders}"
-                                    ToolTip.Tip="Sync Đơn hàng — vào Quản lý đơn hàng tab Tất cả, duyệt mọi trang và lưu thông tin đơn về máy" />
-                            <!-- Dừng phiên của TÀI KHOẢN ĐANG CHỌN (chỉ bật khi tài khoản đó đang chạy). -->
-                            <Button Grid.Column="5" Classes="secondary formIcon" Content="■" Margin="8,0,0,0"
-                                    Command="{Binding StopCommand}"
-                                    IsEnabled="{Binding CanStopSeller}"
-                                    ToolTip.Tip="Dừng — Dừng phiên đang mở của tài khoản này (đóng cửa sổ Brave của phiên đó)" />
-                            <!-- Xử lý đơn: mở Cài đặt vận chuyển → tab Địa Chỉ (kiểu người). Bật khi Chờ lấy hàng > 0. -->
-                            <Button Grid.Column="6" Classes="accentOutline formIcon" Content="►" Margin="8,0,0,0"
-                                    Command="{Binding ProcessOrdersCommand}"
-                                    IsEnabled="{Binding CanProcessOrders}"
-                                    ToolTip.Tip="Xử lý đơn — Mở Cài đặt vận chuyển → tab Địa Chỉ trong phiên đang chạy (bật khi Chờ lấy hàng > 0)" />
-                            <Button Grid.Column="7" Classes="accentOutline formIcon" Content="↗" Margin="8,0,0,0"
-                                    Command="{Binding OpenSellerCommand}"
-                                    IsEnabled="{Binding CanOpenSeller}"
-                                    ToolTip.Tip="Mở trang bán hàng — Mở Shopee Seller để đăng nhập và lưu cookie vào tài khoản này (mở nhiều tài khoản song song)" />
+                        <!-- Hàng nút hành động: ICON + NHÃN CHỮ, chia 2 NHÓM rõ. Nhóm TRÁI = sửa bản ghi (Lưu/Hủy);
+                             nhóm PHẢI = thao tác phiên (Kiểm tra / Sync / Dừng / Xử lý đơn / Mở trang). Khoảng '*' giữa
+                             2 nhóm đẩy chúng về 2 phía. Class màu + Command + IsEnabled + tooltip GIỮ NGUYÊN. -->
+                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,16">
+
+                            <!-- Nhóm TRÁI: sửa bản ghi -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Button Classes="accent formIcon" Content="✓ Lưu"
+                                        Command="{Binding SaveCommand}"
+                                        ToolTip.Tip="Lưu thay đổi" />
+                                <Button Classes="secondary formIcon" Content="↶ Hủy"
+                                        Command="{Binding CancelCommand}"
+                                        ToolTip.Tip="Hủy" />
+                            </StackPanel>
+
+                            <!-- Nhóm PHẢI: thao tác phiên -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <!-- Kiểm tra: về trang chủ Seller + đọc số Chờ Lấy Hàng NGAY (không đợi 30'). Bật khi phiên đang chạy. -->
+                                <Button Classes="secondary formIcon" Content="⟳ Kiểm tra"
+                                        Command="{Binding CheckOrdersCommand}"
+                                        IsEnabled="{Binding CanCheckOrders}"
+                                        ToolTip.Tip="Kiểm tra — Về trang chủ Seller và kiểm tra số đơn Chờ Lấy Hàng ngay (không đợi chu kỳ 30')" />
+                                <!-- Sync Đơn hàng: vào Quản lý đơn hàng tab Tất cả, duyệt mọi trang, lưu đơn về máy. Bật khi phiên đang chạy. -->
+                                <Button Classes="secondary formIcon" Content="⇊ Sync"
+                                        Command="{Binding SyncOrdersCommand}"
+                                        IsEnabled="{Binding CanSyncOrders}"
+                                        ToolTip.Tip="Sync Đơn hàng — vào Quản lý đơn hàng tab Tất cả, duyệt mọi trang và lưu thông tin đơn về máy" />
+                                <!-- Dừng phiên của TÀI KHOẢN ĐANG CHỌN (chỉ bật khi tài khoản đó đang chạy). -->
+                                <Button Classes="secondary formIcon" Content="■ Dừng"
+                                        Command="{Binding StopCommand}"
+                                        IsEnabled="{Binding CanStopSeller}"
+                                        ToolTip.Tip="Dừng — Dừng phiên đang mở của tài khoản này (đóng cửa sổ Brave của phiên đó)" />
+                                <!-- Xử lý đơn: mở Cài đặt vận chuyển → tab Địa Chỉ (kiểu người). Bật khi Chờ lấy hàng > 0. -->
+                                <Button Classes="accentOutline formIcon" Content="► Xử lý đơn"
+                                        Command="{Binding ProcessOrdersCommand}"
+                                        IsEnabled="{Binding CanProcessOrders}"
+                                        ToolTip.Tip="Xử lý đơn — Mở Cài đặt vận chuyển → tab Địa Chỉ trong phiên đang chạy (bật khi Chờ lấy hàng > 0)" />
+                                <Button Classes="accentOutline formIcon" Content="↗ Mở trang"
+                                        Command="{Binding OpenSellerCommand}"
+                                        IsEnabled="{Binding CanOpenSeller}"
+                                        ToolTip.Tip="Mở trang bán hàng — Mở Shopee Seller để đăng nhập và lưu cookie vào tài khoản này (mở nhiều tài khoản song song)" />
+                            </StackPanel>
+
                         </Grid>
 
                         <!-- Thông báo trạng thái (Mở trang bán hàng / Xử lý đơn / theo dõi đơn) — ngay dưới hàng nút. -->
@@ -317,96 +326,113 @@
                                    TextWrapping="Wrap" Margin="0,0,0,16"
                                    IsVisible="{Binding OrderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-                        <!-- Card 1: Thông tin đăng nhập (Tên đăng nhập + Mật khẩu CÙNG 1 HÀNG). -->
-                        <Border Classes="card" Padding="20,16" Margin="0,0,0,12">
-                            <StackPanel Spacing="12">
-                                <TextBlock Classes="section" Text="THÔNG TIN ĐĂNG NHẬP" />
+                        <!-- 4 card dàn LƯỚI 2 CỘT (lấp bề ngang, hết cảnh neo-trái để trống mảng phải). Cột TRÁI =
+                             THÔNG TIN ĐĂNG NHẬP + PROXY; cột PHẢI = COOKIE + ĐỊA CHỈ LẤY HÀNG; cột giữa 16 = khe.
+                             Mỗi cột là StackPanel Spacing=12 nên card cách đều theo dọc (bỏ Margin dưới từng card). -->
+                        <Grid ColumnDefinitions="*,16,*">
 
-                                <Grid ColumnDefinitions="*,14,*">
-                                    <!-- Tên đăng nhập -->
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Classes="fieldLabel" Text="Tên đăng nhập" />
-                                        <Border Classes="field" Height="38">
-                                            <Grid>
-                                                <TextBox Classes="bare" Margin="12,0"
-                                                         Text="{Binding EditEmail}"
-                                                         Watermark="Email hoặc tên đăng nhập" />
-                                                <Border Classes="underline" />
-                                            </Grid>
-                                        </Border>
-                                    </StackPanel>
-                                    <!-- Mật khẩu -->
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Classes="fieldLabel" Text="Mật khẩu" />
-                                        <Border Classes="field" Height="38">
-                                            <Grid ColumnDefinitions="*,Auto">
-                                                <TextBox Grid.Column="0" Classes="bare" Margin="12,0,0,0"
-                                                         Text="{Binding EditPassword}"
-                                                         PasswordChar="●"
-                                                         RevealPassword="{Binding ShowPassword}" />
-                                                <Button Grid.Column="1" Classes="ghostIcon" Margin="4,0,5,0"
-                                                        Command="{Binding ToggleShowPasswordCommand}"
-                                                        ToolTip.Tip="Hiện/ẩn mật khẩu">
-                                                    <Panel>
-                                                        <TextBlock Text="👁" FontSize="14"
-                                                                   IsVisible="{Binding !ShowPassword}" />
-                                                        <TextBlock Text="🙈" FontSize="14"
-                                                                   IsVisible="{Binding ShowPassword}" />
-                                                    </Panel>
-                                                </Button>
-                                                <Border Classes="underline" Grid.ColumnSpan="2" />
-                                            </Grid>
-                                        </Border>
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
+                            <!-- ===== Cột trái ===== -->
+                            <StackPanel Grid.Column="0" Spacing="12">
 
-                        <!-- Cookie đăng nhập: CHỈ hiện trạng thái đã có / chưa có (bỏ ô hiển thị chuỗi cookie
-                             thô để form gọn, không bị scroll). -->
-                        <Border Classes="card" Padding="20,14" Margin="0,0,0,12">
-                            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                                <TextBlock Classes="section" Text="COOKIE ĐĂNG NHẬP" VerticalAlignment="Center" />
-                                <TextBlock Text="✓ Đã có cookie đăng nhập" FontSize="13" FontWeight="SemiBold"
-                                           Foreground="#2E7D32" VerticalAlignment="Center"
-                                           IsVisible="{Binding HasCookie}" />
-                                <TextBlock Text="Chưa có — mở trang bán hàng để tự lưu"
-                                           FontSize="13" Foreground="{StaticResource Text9A}"
-                                           VerticalAlignment="Center" IsVisible="{Binding !HasCookie}" />
-                            </StackPanel>
-                        </Border>
+                                <!-- Card: Thông tin đăng nhập (Tên đăng nhập + Mật khẩu CÙNG 1 HÀNG). -->
+                                <Border Classes="card" Padding="20,16">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Classes="section" Text="THÔNG TIN ĐĂNG NHẬP" />
 
-                        <!-- Card: Proxy riêng theo tài khoản (API key KiotProxy) -->
-                        <Border Classes="card" Padding="20,16" Margin="0,0,0,12">
-                            <StackPanel Spacing="12">
-                                <TextBlock Classes="section" Text="PROXY" />
-                                <StackPanel>
-                                    <TextBlock Classes="fieldLabel"
-                                               Text="Proxy — API key KiotProxy (mỗi tài khoản 1 proxy)" />
-                                    <Border Classes="field" Height="38">
-                                        <Grid>
-                                            <TextBox Classes="bare" Margin="12,0"
-                                                     Text="{Binding EditProxyKey}"
-                                                     Watermark="Dán API key KiotProxy cho tài khoản này (để trống = dùng cấu hình chung / IP máy)" />
-                                            <Border Classes="underline" />
+                                        <Grid ColumnDefinitions="*,14,*">
+                                            <!-- Tên đăng nhập -->
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Classes="fieldLabel" Text="Tên đăng nhập" />
+                                                <Border Classes="field" Height="38">
+                                                    <Grid>
+                                                        <TextBox Classes="bare" Margin="12,0"
+                                                                 Text="{Binding EditEmail}"
+                                                                 Watermark="Email hoặc tên đăng nhập" />
+                                                        <Border Classes="underline" />
+                                                    </Grid>
+                                                </Border>
+                                            </StackPanel>
+                                            <!-- Mật khẩu -->
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Classes="fieldLabel" Text="Mật khẩu" />
+                                                <Border Classes="field" Height="38">
+                                                    <Grid ColumnDefinitions="*,Auto">
+                                                        <TextBox Grid.Column="0" Classes="bare" Margin="12,0,0,0"
+                                                                 Text="{Binding EditPassword}"
+                                                                 PasswordChar="●"
+                                                                 RevealPassword="{Binding ShowPassword}" />
+                                                        <Button Grid.Column="1" Classes="ghostIcon" Margin="4,0,5,0"
+                                                                Command="{Binding ToggleShowPasswordCommand}"
+                                                                ToolTip.Tip="Hiện/ẩn mật khẩu">
+                                                            <Panel>
+                                                                <TextBlock Text="👁" FontSize="14"
+                                                                           IsVisible="{Binding !ShowPassword}" />
+                                                                <TextBlock Text="🙈" FontSize="14"
+                                                                           IsVisible="{Binding ShowPassword}" />
+                                                            </Panel>
+                                                        </Button>
+                                                        <Border Classes="underline" Grid.ColumnSpan="2" />
+                                                    </Grid>
+                                                </Border>
+                                            </StackPanel>
                                         </Grid>
-                                    </Border>
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
+                                    </StackPanel>
+                                </Border>
 
-                        <!-- Card: Địa chỉ lấy hàng mặc định (dùng cho xử lý đơn sau này) -->
-                        <Border Classes="card" Padding="20,16" Margin="0,0,0,12">
-                            <StackPanel Spacing="12">
-                                <TextBlock Classes="section" Text="ĐỊA CHỈ LẤY HÀNG" />
-                                <StackPanel>
-                                    <TextBlock Classes="fieldLabel" Text="Địa chỉ lấy hàng mặc định" />
-                                    <ComboBox Classes="field" HorizontalAlignment="Stretch"
-                                              ItemsSource="{x:Static vm:AccountsViewModel.PickupAddressOptions}"
-                                              SelectedItem="{Binding EditPickupAddress}" />
-                                </StackPanel>
+                                <!-- Card: Proxy riêng theo tài khoản (API key KiotProxy) -->
+                                <Border Classes="card" Padding="20,16">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Classes="section" Text="PROXY" />
+                                        <StackPanel>
+                                            <TextBlock Classes="fieldLabel"
+                                                       Text="Proxy — API key KiotProxy (mỗi tài khoản 1 proxy)" />
+                                            <Border Classes="field" Height="38">
+                                                <Grid>
+                                                    <TextBox Classes="bare" Margin="12,0"
+                                                             Text="{Binding EditProxyKey}"
+                                                             Watermark="Dán API key KiotProxy cho tài khoản này (để trống = dùng cấu hình chung / IP máy)" />
+                                                    <Border Classes="underline" />
+                                                </Grid>
+                                            </Border>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
                             </StackPanel>
-                        </Border>
+
+                            <!-- ===== Cột phải ===== -->
+                            <StackPanel Grid.Column="2" Spacing="12">
+
+                                <!-- Cookie đăng nhập: CHỈ hiện trạng thái đã có / chưa có (bỏ ô hiển thị chuỗi
+                                     cookie thô để form gọn, không bị scroll). -->
+                                <Border Classes="card" Padding="20,14">
+                                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                        <TextBlock Classes="section" Text="COOKIE ĐĂNG NHẬP" VerticalAlignment="Center" />
+                                        <TextBlock Text="✓ Đã có cookie đăng nhập" FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="#2E7D32" VerticalAlignment="Center"
+                                                   IsVisible="{Binding HasCookie}" />
+                                        <TextBlock Text="Chưa có — mở trang bán hàng để tự lưu"
+                                                   FontSize="13" Foreground="{StaticResource Text9A}"
+                                                   VerticalAlignment="Center" IsVisible="{Binding !HasCookie}" />
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Card: Địa chỉ lấy hàng mặc định (dùng cho xử lý đơn sau này) -->
+                                <Border Classes="card" Padding="20,16">
+                                    <StackPanel Spacing="12">
+                                        <TextBlock Classes="section" Text="ĐỊA CHỈ LẤY HÀNG" />
+                                        <StackPanel>
+                                            <TextBlock Classes="fieldLabel" Text="Địa chỉ lấy hàng mặc định" />
+                                            <ComboBox Classes="field" HorizontalAlignment="Stretch"
+                                                      ItemsSource="{x:Static vm:AccountsViewModel.PickupAddressOptions}"
+                                                      SelectedItem="{Binding EditPickupAddress}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                            </StackPanel>
+
+                        </Grid>
                     </StackPanel>
                 </ScrollViewer>
                     </Grid>
