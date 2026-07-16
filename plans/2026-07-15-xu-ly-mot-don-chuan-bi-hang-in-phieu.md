@@ -368,3 +368,48 @@ phím ĐÓNG modal (không phải click chuột nghiệp vụ — đã được 
 
 **CHƯA smoke được các nhánh mới** (không có phiên/đơn thật ở đây): thứ tự tải mới, click nút "In phiếu" trên
 tab, và đóng modal X — cần người dùng smoke 1 đơn, gửi lại log + kiểm `D:\Phieu-giao-hang`.
+
+### Sửa lượt smoke tiếp (2026-07-16) — tab phiếu mở MUỘN, RunAndWaitForPageAsync bỏ lỡ
+
+Smoke báo "không In phiếu giao được, không bắt được tab phiếu" DÙ modal + nút "In phiếu giao" vẫn hiện đúng
+(vận đơn đã tạo, có tracking number). Kết luận: nút BẤM ĐƯỢC nhưng tab phiếu mở MUỘN (Shopee gọi API tạo bản
+in) → quá timeout ngắn của `RunAndWaitForPageAsync` + vòng retry re-click gây rối. Sửa (chỉ
+`ShopeeLoginService.cs`, `ProcessFirstOrderAsync` bước 6): BỎ `RunAndWaitForPageAsync` + vòng retry, thay
+bằng TÁCH 2 PHA có log kỹ:
+- **PHA 1 — bấm đáng tin:** chụp `before = _browser.Contexts.SelectMany(c => c.Pages)` TRƯỚC khi bấm; bấm
+  (re-find nút TƯƠI qua `WaitPrintButtonClickableAsync`) tới khi `clicked=true` hoặc ~20s. Không bấm được →
+  L + `PrintFailed`.
+- **PHA 2 — chờ tab (poll, ~25s):** poll MỌI context (`_browser.Contexts.SelectMany(...).FirstOrDefault(p =>
+  p != page && !before.Contains(p))`) tìm trang MỚI — KHÔNG dùng `RunAndWaitForPageAsync`. Thấy → chờ tiếp
+  ~10s tới khi URL có "awbprint" (tab có thể khởi đầu about:blank). Không thấy tab sau 25s → L + `PrintFailed`.
+- Log từng pha: "Đã bấm In phiếu giao, chờ tab phiếu mở..." / "Đã bắt được tab phiếu (awbprint OK|URL chưa
+  phải awbprint)" / "...KHÔNG thấy tab phiếu mở ra sau 25s." để smoke chỉ ra đúng chỗ hỏng.
+- GIỮ NGUYÊN `DownloadAndPrintSlipAsync` + `CloseDetailModalAsync` + các helper (`SafeUrlHasAwbprint` vẫn
+  dùng ở pha 2). Bỏ logic double-tab cũ của `RunAndWaitForPageAsync`; `RunAndWaitForPageAsync` không còn
+  trong code (chỉ còn trong comment giải thích).
+
+**Kiểm chứng:** `dotnet build` → **0 Warning, 0 Error** (không dead-code warning — `clicked` vẫn dùng ở
+prepare/confirm, `RunAndWaitForPageAsync` đã gỡ khỏi code); `dotnet test --no-build` → **389 pass, 0 fail**.
+Không WDAC chặn. Chỉ đụng `ShopeeLoginService.cs`. KHÔNG commit. Vẫn CHƯA smoke live nhánh 2-pha này.
+
+### Sửa lượt smoke tiếp (2026-07-16) — chuột KHÔNG bấm được "In phiếu giao" (hit-test lần hai false-negative)
+
+Smoke báo "chuột không bấm được In phiếu giao" (PHA 1 không bao giờ thành công) DÙ các click trước (Chuẩn bị
+hàng/Xác nhận) ăn bình thường. Nguyên nhân: nút đã được `WaitPrintButtonClickableAsync` xác nhận CLICKABLE
+(hit-test pass), nhưng `TryHumanClickVisibleAsync` lại HIT-TEST LẦN HAI lúc bấm → đôi lúc false-negative →
+không nhả chuột. Sửa 2 file:
+- **`BraveLaunchArgs.cs`:** thêm cờ `--disable-popup-blocking` (nút In phiếu giao mở tab bằng `window.open`
+  → tránh bị chặn popup khiến tab không mở). Thêm test `CoCoDisablePopupBlocking` trong `BraveLaunchArgsTests`.
+- **`ShopeeLoginService.cs` (bước 6):** PHA bấm thay `TryHumanClickVisibleAsync` bằng `HumanMoveAndClickAsync`
+  (click KIỂU NGƯỜI THẲNG: chuột cong + down/trễ/up, KHÔNG kiểm hit-test lần hai — nút đã xác nhận clickable;
+  vẫn like-human, KHÔNG native). `HumanMoveAndClickAsync` không trả cờ "clicked" → thành công THẬT xác nhận
+  bằng TAB PHIẾU mở ra. Gộp bấm + chờ tab thành 1 vòng ~40s: mỗi vòng KIỂM tab đã mở TRƯỚC khi bấm lại
+  (chống double-tab) → nếu chưa, re-find nút TƯƠI + `HumanMoveAndClickAsync` → chờ tab ~8s rồi lặp. Không
+  thấy tab sau 40s → `PrintFailed`. GIỮ đoạn chờ URL awbprint (~10s) + `DownloadAndPrintSlipAsync` +
+  `CloseDetailModalAsync`. Nút "In phiếu" trên TAB PHIẾU vẫn dùng `TryHumanClickVisibleAsync` (chưa có báo
+  lỗi, KHÔNG đổi đợt này).
+
+**Kiểm chứng:** `dotnet build` → **0 Warning, 0 Error**; `dotnet test --no-build` → **390 pass, 0 fail**
+(389 nền + 1 ca `CoCoDisablePopupBlocking`). Không WDAC chặn. Không native click (grep
+`.ClickAsync/.FillAsync/Mouse.ClickAsync/.CheckAsync/.SetCheckedAsync` = 0). Phạm vi: `BraveLaunchArgs.cs`,
+`BraveLaunchArgsTests.cs`, `ShopeeLoginService.cs`. KHÔNG commit. CHƯA smoke live nhánh này.

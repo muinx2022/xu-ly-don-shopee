@@ -40,6 +40,16 @@ public class BraveLaunchArgsTests
     }
 
     [Fact]
+    public void CoCoDisablePopupBlocking()
+    {
+        // Nút "In phiếu giao" mở tab phiếu bằng window.open — không chặn popup để tab phiếu luôn mở ra
+        // (nếu bị chặn thì không bắt được tab để tải/in). Cờ này BẮT BUỘC có cho bước In phiếu giao.
+        var args = BraveLaunchArgs.BuildBraveArgs("/tmp/p", 0, null);
+
+        Assert.Contains("--disable-popup-blocking", args);
+    }
+
+    [Fact]
     public void KhongChua_EnableAutomation_VaKhongChua_Headless()
     {
         var args = BraveLaunchArgs.BuildBraveArgs("/tmp/p", 0, null);

@@ -2183,20 +2183,33 @@ public class ShopeeLoginService
                 }
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false); // "đọc modal"
 
-                // 6) Bấm "In phiếu giao" + BẮT tab mới + tải + in + đóng.
-                // SAU khi Xác nhận, modal "Thông Tin Chi Tiết" đổi trạng thái (Shopee tạo vận đơn): nút "In
-                // phiếu giao" HIỆN MUỘN và lúc mới hiện còn bị LỚP CHE "đang tạo vận đơn" đè (có bounding box
-                // nhưng hit-test fail → click không ăn), lại có thể STALE khi modal re-render. → Vòng THỬ LẠI:
-                // mỗi lần RE-FIND nút TƯƠI, chỉ chờ tới khi nút THẬT SỰ BẤM ĐƯỢC (hit-test pass) rồi click +
-                // bắt tab; tối đa ~35s. Chống double-tab: nếu click đã landed mà tab mở muộn → nhận tab đó.
+                // 6) Bấm "In phiếu giao" (kiểu người THẲNG) → CHỜ tab phiếu mở (có thể MUỘN) → tải + in + đóng.
+                // Smoke: nút "In phiếu giao" đã được WaitPrintButtonClickableAsync xác nhận CLICKABLE (hit-test
+                // pass), NHƯNG nếu bấm qua TryHumanClickVisibleAsync (hit-test LẦN HAI lúc bấm) thì đôi lúc
+                // false-negative → không nhả chuột (chuột "không bấm được"). → Sau khi ĐÃ xác nhận clickable,
+                // CLICK KIỂU NGƯỜI THẲNG bằng HumanMoveAndClickAsync (chuột cong + down/trễ/up, KHÔNG kiểm
+                // hit-test lần hai — vẫn like-human, KHÔNG native). HumanMoveAndClickAsync không trả cờ
+                // "clicked" → thành công THẬT xác nhận bằng việc TAB PHIẾU mở ra (PHA 2). Tab có thể mở MUỘN
+                // (Shopee gọi API tạo bản in) nên poll MỌI context tới ~40s; chống double-tab bằng cách kiểm
+                // tab đã mở TRƯỚC mỗi lần bấm lại.
                 L("Chờ nút In phiếu giao bấm được (Shopee đang tạo vận đơn)...");
+                var before = _browser.Contexts.SelectMany(c => c.Pages).ToList();
                 IPage? newPage = null;
-                var printDeadline = DateTime.UtcNow.AddSeconds(35);
+                var printDeadline = DateTime.UtcNow.AddSeconds(40);
                 while (newPage is null && DateTime.UtcNow < printDeadline)
                 {
                     ct.ThrowIfCancellationRequested();
 
-                    // Chờ nút TƯƠI thật sự bấm được (không chỉ có box). Query lại mỗi vòng → không giữ handle stale.
+                    // Tab đã mở từ cú click TRƯỚC? (tránh bấm lại → double-tab). Quét MỌI context (tab có thể
+                    // mở ở context/cửa sổ khác).
+                    try { newPage = _browser.Contexts.SelectMany(c => c.Pages).FirstOrDefault(p => p != page && !before.Contains(p)); }
+                    catch { /* context ngắt — thử vòng sau */ }
+                    if (newPage is not null)
+                    {
+                        break;
+                    }
+
+                    // Re-find nút TƯƠI + xác nhận bấm được (hit-test MỘT lần ở đây), rồi CLICK KIỂU NGƯỜI THẲNG.
                     var btn = await WaitPrintButtonClickableAsync(page, ShopeeShippingNav.IsPrintSlipButtonText, 8000, ct).ConfigureAwait(false);
                     if (btn is null)
                     {
@@ -2204,37 +2217,36 @@ public class ShopeeLoginService
                         continue;
                     }
 
-                    clicked = false; // tái dùng biến 'clicked' đã khai báo ở bước trên (tránh trùng tên scope)
-                    try
+                    (mx, my) = await HumanMoveAndClickAsync(page, btn, mx, my, rng, ct).ConfigureAwait(false);
+                    L("Đã bấm In phiếu giao (kiểu người), chờ tab phiếu mở...");
+
+                    // Chờ tab mới ~8s sau cú click này rồi mới thử lại (bấm lần nữa nếu vẫn chưa mở).
+                    var waitTab = DateTime.UtcNow.AddSeconds(8);
+                    while (newPage is null && DateTime.UtcNow < waitTab)
                     {
-                        // Bắt tab MỚI (bắt cả window.open) — click nút NGAY trong action để bắt token 1 lần.
-                        newPage = await _context.RunAndWaitForPageAsync(async () =>
-                        {
-                            (mx, my, clicked) = await TryHumanClickVisibleAsync(page, btn, mx, my, rng, ct).ConfigureAwait(false);
-                        }, new BrowserContextRunAndWaitForPageOptions { Timeout = 8000 }).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch
-                    {
-                        // Hết 8s chưa bắt được tab. Nếu click ĐÃ landed (clicked=true) thì tab có thể mở MUỘN
-                        // → nhận tab awbprint đã mở để KHÔNG bấm lại (tránh double-tab). Chưa có → thử lại vòng sau.
-                        if (clicked)
-                        {
-                            try { newPage = _context.Pages.FirstOrDefault(p => p != page && SafeUrlHasAwbprint(p)); }
-                            catch { /* context ngắt — thử vòng sau */ }
-                        }
+                        ct.ThrowIfCancellationRequested();
+                        try { newPage = _browser.Contexts.SelectMany(c => c.Pages).FirstOrDefault(p => p != page && !before.Contains(p)); }
+                        catch { /* context ngắt — thử vòng sau */ }
                         if (newPage is null)
                         {
-                            await Task.Delay(rng.Next(600, 1400), ct).ConfigureAwait(false);
+                            await Task.Delay(400, ct).ConfigureAwait(false);
                         }
                     }
                 }
-
                 if (newPage is null)
                 {
+                    L("Đã bấm In phiếu giao nhưng KHÔNG thấy tab phiếu mở ra — kiểm tra tay.");
                     return ArrangeShipmentResult.PrintFailed;
                 }
-                L("Đã bấm In phiếu giao, bắt được tab phiếu.");
+
+                // Chờ tab điều hướng tới awbprint (có thể khởi đầu about:blank).
+                var urlDeadline = DateTime.UtcNow.AddSeconds(10);
+                while (!SafeUrlHasAwbprint(newPage) && DateTime.UtcNow < urlDeadline)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await Task.Delay(300, ct).ConfigureAwait(false);
+                }
+                L($"Đã bắt được tab phiếu ({(SafeUrlHasAwbprint(newPage) ? "awbprint OK" : "URL chưa phải awbprint")}).");
 
                 // Từ đây: TẢI/IN best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
                 await DownloadAndPrintSlipAsync(newPage, downloadDir, orderCode, L, ct).ConfigureAwait(false);

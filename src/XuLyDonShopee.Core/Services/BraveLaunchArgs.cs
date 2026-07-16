@@ -51,6 +51,9 @@ public static class BraveLaunchArgs
             // KHÔNG hiện hộp thoại "Print" mà in thẳng máy in mặc định (dùng để tự in phiếu giao hàng).
             // Không có máy in mặc định thì lệnh in không ra giấy nhưng KHÔNG phá luồng.
             "--kiosk-printing",
+            // KHÔNG chặn popup: nút "In phiếu giao" mở tab phiếu bằng window.open — nếu bị chặn popup thì
+            // tab phiếu không mở ra (không bắt được để tải/in). Cho phép popup để tab phiếu luôn mở.
+            "--disable-popup-blocking",
         };
 
         if (proxy is not null)
