@@ -43,6 +43,14 @@ public partial class AccountSession : ObservableObject, IAccountSession
     // (ReadToShipCountAsync có reload trang → sẽ phá thao tác điều hướng đang chạy giữa chừng).
     private volatile bool _navigating;
 
+    // Cờ "SẴN SÀNG THAO TÁC" TƯỜNG MINH: chỉ true SAU khi (của lần mở/relaunch HIỆN TẠI) đã tự-đăng-nhập
+    // xong VÀ đọc được số "Chờ Lấy Hàng" lần đầu — điểm CHẮC CHẮN trang chủ đã đăng nhập & ổn định, luồng
+    // chuột tự-đăng-nhập đã xong. Nút Sync/Kiểm tra (AccountsViewModel) CHỜ cờ này rồi mới điều hướng để
+    // KHÔNG giẫm lên login. Đặt LẠI false ở đầu MỖI vòng mở/relaunch + khi phát hiện đổi proxy + khi
+    // Stopped/Error → kín mọi ca restart/relaunch/đang-login, KHÔNG bị "sẵn sàng ảo" do số đơn cũ còn sót
+    // (ToShipCount không reset khi relaunch). volatile: đọc từ UI thread trong lúc phiên chạy nền ghi.
+    private volatile bool _readyForActions;
+
     // Proxy đang NƯỚNG vào Brave (đặt lúc launch qua --proxy-server) — watchdog kiểm cái này còn sống không.
     private volatile ProxyEntry? _currentProxy;
 
@@ -116,6 +124,12 @@ public partial class AccountSession : ObservableObject, IAccountSession
 
     public Process? BraveProcess => _session?.BraveProcess;
 
+    /// <summary>
+    /// True khi phiên đã "sẵn sàng thao tác" (của lần mở HIỆN TẠI đã đăng nhập xong + đọc số đơn lần đầu) —
+    /// VM chờ cờ này rồi mới chạy Sync/Kiểm tra để không giẫm luồng tự-đăng-nhập. Xem <see cref="_readyForActions"/>.
+    /// </summary>
+    public bool ReadyForActions => _readyForActions;
+
     public event Action? Changed;
     public event Action<long>? CookieSaved;
 
@@ -132,6 +146,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
             _cts = new CancellationTokenSource();
             var ct = _cts.Token;
             LastError = null;
+            _readyForActions = false; // phiên mới khởi động → CHƯA sẵn sàng (chờ login + đọc số lần đầu)
             State = SessionState.Opening;
             _runTask = Task.Run(() => RunAsync(ct));
         }
@@ -663,6 +678,9 @@ public partial class AccountSession : ObservableObject, IAccountSession
             while (!ct.IsCancellationRequested)
             {
                 bool relaunchForProxy = false;
+                // ĐẦU MỖI vòng mở/relaunch: CHƯA sẵn sàng — phải đăng nhập lại + đọc số lần đầu mới bật lại
+                // (kín cả đường proxy-chết-relaunch: ToShipCount giữ số cũ nhưng cờ này về false).
+                _readyForActions = false;
 
                 // 3) Mở cửa sổ trình duyệt (profile persistent) tới trang bán hàng.
                 SetStatus(SessionState.Opening,
@@ -783,6 +801,9 @@ public partial class AccountSession : ObservableObject, IAccountSession
                             {
                                 firstOrderCheck = false;
                                 ToShipCount = n; // VM tự định dạng dòng hiển thị theo số này
+                                // Đọc được số lần đầu SAU login → trang chủ đã đăng nhập & ổn định, _navigating
+                                // vừa nhả false (finally trên) → BẬT sẵn sàng: nút Sync/Kiểm tra được điều hướng.
+                                _readyForActions = true;
                                 nextOrderCheck = DateTime.UtcNow.AddMinutes(OrderIntervalMin); // đã đăng nhập → 30'
                             }
                             else
@@ -807,6 +828,9 @@ public partial class AccountSession : ObservableObject, IAccountSession
                                 {
                                     _currentProxy = replacement;
                                     relaunchForProxy = true;
+                                    // Sắp dispose + relaunch (State GIỮ Running suốt lúc đổi proxy) → tắt sẵn
+                                    // sàng NGAY để nút Sync/Kiểm tra không chạy vào phiên đang bị tháo dỡ.
+                                    _readyForActions = false;
                                 }
                             }
                             catch (OperationCanceledException)
@@ -882,6 +906,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
         finally
         {
             _session = null;
+            _readyForActions = false; // phiên kết thúc (Stopped/Error/hủy) → không còn sẵn sàng
             lock (_lifecycleLock)
             {
                 // Kết thúc bình thường / bị hủy → Stopped; giữ nguyên Error để còn hiển thị lỗi.
@@ -902,6 +927,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
 
     private void SetError(string message)
     {
+        _readyForActions = false; // lỗi → không còn sẵn sàng (nút Sync/Kiểm tra sẽ tự mở/khởi động lại phiên)
         LastError = message;
         StatusText = message;
         State = SessionState.Error;
