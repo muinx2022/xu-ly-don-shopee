@@ -1,7 +1,7 @@
 # Plan: Sync Đơn hàng (phần 2) — màn "Đơn hàng" xem trong app + xuất CSV/Excel
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** chờ (làm SAU khi phần 1 `2026-07-16-sync-don-hang-thu-thap-luu-db.md` hoàn thành & merge)
+- **Trạng thái:** hoàn thành (chờ người dùng smoke — xem bảng, lọc, xuất CSV mở Excel)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -40,4 +40,6 @@ Phần 1 đã có bảng `orders` + `OrdersRepository` + nút Sync. Phần này 
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus làm đủ bước 1–5: `OrdersRepository.Query`/`AllStatuses`; `OrderCsvExporter` thuần (RFC4180 + BOM); `OrderRow`/`OrderRowViewModel`/`OrdersViewModel` (lọc tài khoản/trạng thái/tìm kiếm live + Làm mới + Xuất CSV); `OrdersView` theo pattern ProxiesView; mục nav "Đơn hàng" (index 1). 25 test mới. 6 điểm khác plan đã duyệt.
+
+Nghiệm thu (Fable): panel đối kháng chốt 3 lỗi → Opus sửa và Fable kiểm lại: (1) [cao] xuất CSV bọc try/catch — đè file đang mở trong Excel không còn crash, báo "Xuất CSV thất bại: ..."; (2) [bảo mật] `SanitizeField` chèn `'` trước field bắt đầu `= + - @ / TAB / CR` chống Excel chạy công thức (dữ liệu người mua kiểm soát); (3) ComboBox trạng thái lọc theo tài khoản đang chọn. Debounce lọc-live ghi nợ (DispatcherTimer khó test headless; SQLite vài nghìn đơn đủ nhanh). Tự build 0 warning + 458/458 test. Smoke: CHỜ NGƯỜI DÙNG mở app xem bảng/lọc/xuất CSV.

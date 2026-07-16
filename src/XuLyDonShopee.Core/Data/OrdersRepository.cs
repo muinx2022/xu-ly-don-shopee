@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 using XuLyDonShopee.Core.Models;
 
@@ -103,6 +104,116 @@ public class OrdersRepository
         cmd.Parameters.AddWithValue("$account", accountId);
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
+
+    /// <summary>
+    /// Đọc các đơn theo bộ lọc (màn "Đơn hàng"). Mọi tham số đều tùy chọn — bỏ trống là không lọc:
+    /// <list type="bullet">
+    /// <item><paramref name="accountId"/>: chỉ đơn của một tài khoản.</item>
+    /// <item><paramref name="status"/>: KHỚP CHÍNH XÁC giá trị trạng thái (ComboBox nạp từ
+    /// <see cref="AllStatuses"/> nên luôn là giá trị có thật; dùng "=" thay vì LIKE để "Đã hủy" không
+    /// dính "Đã hủy một phần").</item>
+    /// <item><paramref name="searchText"/>: LIKE <c>%từ%</c> trên mã đơn / người mua / tên sản phẩm; các
+    /// ký tự đại diện của LIKE (<c>% _ \</c>) trong từ khóa được escape để tìm đúng nghĩa đen.</item>
+    /// </list>
+    /// Sắp xếp đơn sync mới nhất lên đầu.
+    /// </summary>
+    public List<OrderRow> Query(long? accountId = null, string? status = null, string? searchText = null)
+    {
+        using var conn = _db.OpenConnection();
+        using var cmd = conn.CreateCommand();
+
+        var sql = new StringBuilder(@"SELECT id, account_id, order_sn, buyer_username, item_count, item_summary,
+    total_price, total_price_text, payment_method, status, status_description, cancel_reason,
+    channel, carrier, tracking_number, synced_at
+    FROM orders WHERE 1 = 1");
+
+        if (accountId is not null)
+        {
+            sql.Append(" AND account_id = $account");
+            cmd.Parameters.AddWithValue("$account", accountId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            sql.Append(" AND status = $status");
+            cmd.Parameters.AddWithValue("$status", status);
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchText))
+        {
+            sql.Append(@" AND (order_sn LIKE $q ESCAPE '\'
+                           OR buyer_username LIKE $q ESCAPE '\'
+                           OR item_summary LIKE $q ESCAPE '\')");
+            cmd.Parameters.AddWithValue("$q", "%" + EscapeLike(searchText.Trim()) + "%");
+        }
+
+        sql.Append(" ORDER BY synced_at DESC, id DESC;");
+        cmd.CommandText = sql.ToString();
+
+        var list = new List<OrderRow>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(MapRow(reader));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Danh sách trạng thái PHÂN BIỆT (khác null/rỗng) đang có trong bảng — nạp ComboBox lọc. Có thể giới
+    /// hạn theo <paramref name="accountId"/>. Sắp xếp tăng dần.
+    /// </summary>
+    public List<string> AllStatuses(long? accountId = null)
+    {
+        using var conn = _db.OpenConnection();
+        using var cmd = conn.CreateCommand();
+
+        var sql = new StringBuilder(
+            "SELECT DISTINCT status FROM orders WHERE status IS NOT NULL AND TRIM(status) <> ''");
+        if (accountId is not null)
+        {
+            sql.Append(" AND account_id = $account");
+            cmd.Parameters.AddWithValue("$account", accountId.Value);
+        }
+        sql.Append(" ORDER BY status;");
+        cmd.CommandText = sql.ToString();
+
+        var list = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (!reader.IsDBNull(0))
+            {
+                list.Add(reader.GetString(0));
+            }
+        }
+        return list;
+    }
+
+    /// <summary>Escape các ký tự đại diện của LIKE để tìm theo nghĩa đen (đi kèm <c>ESCAPE '\'</c>).</summary>
+    private static string EscapeLike(string term)
+        => term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    /// <summary>Map một dòng kết quả <see cref="Query"/> sang <see cref="OrderRow"/> (theo thứ tự cột SELECT).</summary>
+    private static OrderRow MapRow(SqliteDataReader r) => new()
+    {
+        Id = r.GetInt64(0),
+        AccountId = r.GetInt64(1),
+        OrderSn = r.GetString(2),
+        BuyerUsername = r.IsDBNull(3) ? null : r.GetString(3),
+        ItemCount = r.IsDBNull(4) ? 0 : r.GetInt32(4),
+        ItemSummary = r.IsDBNull(5) ? null : r.GetString(5),
+        TotalPrice = r.IsDBNull(6) ? null : r.GetInt64(6),
+        TotalPriceText = r.IsDBNull(7) ? null : r.GetString(7),
+        PaymentMethod = r.IsDBNull(8) ? null : r.GetString(8),
+        Status = r.IsDBNull(9) ? null : r.GetString(9),
+        StatusDescription = r.IsDBNull(10) ? null : r.GetString(10),
+        CancelReason = r.IsDBNull(11) ? null : r.GetString(11),
+        Channel = r.IsDBNull(12) ? null : r.GetString(12),
+        Carrier = r.IsDBNull(13) ? null : r.GetString(13),
+        TrackingNumber = r.IsDBNull(14) ? null : r.GetString(14),
+        SyncedAt = r.IsDBNull(15) ? default : DbSerialization.ParseDate(r.GetString(15)),
+    };
 
     /// <summary>Gắn các cột DỮ LIỆU (không gồm account_id/order_sn/khóa/thời gian) vào lệnh. Null → DBNull.</summary>
     private static void BindData(SqliteCommand cmd, SyncedOrder o)

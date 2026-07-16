@@ -13,12 +13,14 @@ public record NavItem(string Label, string Icon);
 public partial class MainViewModel : ViewModelBase
 {
     private readonly AccountsViewModel _accountsVm;
+    private readonly OrdersViewModel _ordersVm;
     private readonly ProxiesViewModel _proxiesVm;
     private readonly SettingsViewModel _settingsVm;
 
     public MainViewModel(AppServices services)
     {
         _accountsVm = new AccountsViewModel(services);
+        _ordersVm = new OrdersViewModel(services);
         _proxiesVm = new ProxiesViewModel(services);
         _settingsVm = new SettingsViewModel(services);
         _currentViewModel = _accountsVm;
@@ -28,6 +30,7 @@ public partial class MainViewModel : ViewModelBase
     public ObservableCollection<NavItem> NavItems { get; } = new()
     {
         new NavItem("Tài khoản", "◵"),
+        new NavItem("Đơn hàng", "▤"),
         new NavItem("Proxy", "⇄"),
         new NavItem("Cài đặt", "⚙")
     };
@@ -47,10 +50,14 @@ public partial class MainViewModel : ViewModelBase
                 CurrentViewModel = _accountsVm;
                 break;
             case 1:
+                _ordersVm.Reload();
+                CurrentViewModel = _ordersVm;
+                break;
+            case 2:
                 _proxiesVm.Reload();
                 CurrentViewModel = _proxiesVm;
                 break;
-            case 2:
+            case 3:
                 _settingsVm.Reload();
                 CurrentViewModel = _settingsVm;
                 break;

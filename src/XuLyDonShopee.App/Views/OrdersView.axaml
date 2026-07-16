@@ -1,0 +1,83 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:XuLyDonShopee.App.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="1284" d:DesignHeight="820"
+             x:Class="XuLyDonShopee.App.Views.OrdersView"
+             x:CompileBindings="False"
+             x:DataType="vm:OrdersViewModel">
+
+    <DockPanel Margin="24,24,32,24">
+
+        <!-- Tiêu đề -->
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <TextBlock Text="Đơn hàng" FontSize="19" FontWeight="Bold" LetterSpacing="-0.3"
+                       Foreground="{StaticResource TextInk}" />
+            <TextBlock Text="Đơn đã đồng bộ từ trang bán hàng Shopee" FontSize="12"
+                       Foreground="{StaticResource TextMuted}" Margin="0,2,0,0" />
+        </StackPanel>
+
+        <!-- Thanh lọc: tài khoản · trạng thái · tìm kiếm · Làm mới · Xuất CSV -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="230,200,*,Auto,Auto" Margin="0,0,0,12">
+            <ComboBox Grid.Column="0" Classes="field" Height="38" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding AccountOptions}"
+                      SelectedItem="{Binding SelectedAccount}">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <ComboBox Grid.Column="1" Classes="field" Height="38" HorizontalAlignment="Stretch"
+                      Margin="8,0,0,0"
+                      ItemsSource="{Binding StatusOptions}"
+                      SelectedItem="{Binding SelectedStatus}" />
+
+            <Border Grid.Column="2" Classes="field" Height="38" Margin="8,0,0,0">
+                <Grid>
+                    <TextBox Classes="bare" Margin="12,0" Text="{Binding SearchText}"
+                             Watermark="Tìm mã đơn / người mua / sản phẩm" />
+                    <Border Classes="underline" />
+                </Grid>
+            </Border>
+
+            <Button Grid.Column="3" Classes="secondary" Height="38" Content="Làm mới"
+                    Margin="8,0,0,0" Command="{Binding RefreshCommand}" />
+            <Button Grid.Column="4" Classes="accent" Height="38" Content="Xuất CSV"
+                    Margin="8,0,0,0" Command="{Binding ExportCsvCommand}" />
+        </Grid>
+
+        <!-- Dòng tổng số + thông báo xuất -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Margin="0,0,0,10">
+            <TextBlock Grid.Column="0" Text="{Binding TotalText}" VerticalAlignment="Center"
+                       Foreground="{StaticResource Text5A}" />
+            <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" HorizontalAlignment="Right"
+                       VerticalAlignment="Center" Foreground="#2E7D32" TextWrapping="NoWrap"
+                       IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </Grid>
+
+        <!-- Bảng đơn (đọc-chỉ) -->
+        <DataGrid Classes="proxy"
+                  ClipToBounds="True"
+                  ItemsSource="{Binding Rows}"
+                  IsReadOnly="True"
+                  AutoGenerateColumns="False"
+                  CanUserResizeColumns="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Tài khoản" Binding="{Binding AccountLabel}" Width="1.3*" />
+                <DataGridTextColumn Header="Mã đơn" Binding="{Binding OrderSn}" Width="130" />
+                <DataGridTextColumn Header="Người mua" Binding="{Binding Buyer}" Width="1.2*" />
+                <DataGridTextColumn Header="Sản phẩm" Binding="{Binding Product}" Width="2*" />
+                <DataGridTextColumn Header="Tổng tiền" Binding="{Binding Total}" Width="105" />
+                <DataGridTextColumn Header="Thanh toán" Binding="{Binding Payment}" Width="1.2*" />
+                <DataGridTextColumn Header="Trạng thái" Binding="{Binding Status}" Width="120" />
+                <DataGridTextColumn Header="Mô tả/Lý do hủy" Binding="{Binding Note}" Width="2*" />
+                <DataGridTextColumn Header="ĐVVC" Binding="{Binding Carrier}" Width="110" />
+                <DataGridTextColumn Header="Mã vận đơn" Binding="{Binding Tracking}" Width="150" />
+                <DataGridTextColumn Header="Sync lúc" Binding="{Binding SyncedAtDisplay}" Width="140" />
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</UserControl>

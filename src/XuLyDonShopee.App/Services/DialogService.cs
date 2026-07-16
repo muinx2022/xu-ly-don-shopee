@@ -1,5 +1,6 @@
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Platform.Storage;
 using XuLyDonShopee.App.Views;
 
 namespace XuLyDonShopee.App.Services;
@@ -45,5 +46,44 @@ public static class DialogService
 
         var dialog = new ImportProxyDialog();
         return await dialog.ShowDialog<string?>(MainWindow);
+    }
+
+    /// <summary>
+    /// Mở SaveFileDialog (StorageProvider của cửa sổ chính) cho người dùng chọn nơi lưu, rồi GHI
+    /// <paramref name="content"/> (đã gồm BOM) ra file đó. Trả về đường dẫn đã lưu, hoặc null nếu chưa
+    /// gán cửa sổ chính / người dùng bấm Hủy. Ghi đè file cũ thì cắt phần đuôi dư (SetLength).
+    /// </summary>
+    public static async Task<string?> SaveCsvAsync(string suggestedFileName, byte[] content)
+    {
+        if (MainWindow is null)
+        {
+            return null;
+        }
+
+        var file = await MainWindow.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Xuất đơn hàng ra CSV",
+            SuggestedFileName = suggestedFileName,
+            DefaultExtension = "csv",
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("CSV (mở bằng Excel)") { Patterns = new[] { "*.csv" } }
+            }
+        });
+        if (file is null)
+        {
+            return null;
+        }
+
+        await using (var stream = await file.OpenWriteAsync())
+        {
+            await stream.WriteAsync(content);
+            if (stream.CanSeek)
+            {
+                stream.SetLength(content.Length);
+            }
+        }
+
+        return file.TryGetLocalPath() ?? file.Name;
     }
 }
