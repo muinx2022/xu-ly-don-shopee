@@ -679,7 +679,18 @@ public partial class AccountsViewModel : ViewModelBase
     /// nhiên qua StatusText/ToShipCount của phiên (đổ về <see cref="BusyStatus"/>/<see cref="OrderStatus"/>).
     /// </summary>
     [RelayCommand]
-    private Task CheckOrdersAsync() => RunOrAutoStartAsync("kiểm tra đơn", s => s.CheckOrdersAsync());
+    private Task CheckOrdersAsync()
+    {
+        // Chụp accountId + email TRƯỚC mọi await rồi truyền vào luồng chung (giữ nguyên hành vi nút đơn:
+        // bám theo tài khoản đang mở trên form). Nút đã disable khi IsNew/không chọn — phòng hờ null.
+        if (_editingId is not long accountId)
+        {
+            return Task.CompletedTask;
+        }
+
+        var email = _services.Accounts.GetById(accountId)?.Email ?? EditEmail;
+        return RunOrAutoStartAsync(accountId, email, "kiểm tra đơn", s => s.CheckOrdersAsync());
+    }
 
     /// <summary>
     /// "Sync Đơn hàng" — vào Quản lý đơn hàng tab "Tất cả", duyệt mọi trang thu thập đơn và lưu về DB. Nút
@@ -688,7 +699,121 @@ public partial class AccountsViewModel : ViewModelBase
     /// hiển thị tự nhiên qua StatusText của phiên (đổ về <see cref="BusyStatus"/>).
     /// </summary>
     [RelayCommand]
-    private Task SyncOrdersAsync() => RunOrAutoStartAsync("sync đơn hàng", s => s.SyncOrdersAsync());
+    private Task SyncOrdersAsync()
+    {
+        // Chụp accountId + email TRƯỚC mọi await (mẫu CheckOrders) — giữ nguyên hành vi nút đơn.
+        if (_editingId is not long accountId)
+        {
+            return Task.CompletedTask;
+        }
+
+        var email = _services.Accounts.GetById(accountId)?.Email ?? EditEmail;
+        return RunOrAutoStartAsync(accountId, email, "sync đơn hàng", s => s.SyncOrdersAsync());
+    }
+
+    /// <summary>Nhãn nguồn log cho các thông báo cấp-BATCH (không thuộc một shop cụ thể) — ghi file &amp; phân
+    /// biệt với log per-account (per-account dùng email của shop).</summary>
+    private const string BatchLogSource = "Hàng loạt";
+
+    /// <summary>Đang có một lượt "Kiểm tra đã chọn" (hàng loạt) chạy — guard chống bấm đúp cấp batch.</summary>
+    private bool _checkSelectedRunning;
+
+    /// <summary>Đang có một lượt "Sync đã chọn" (hàng loạt) chạy — guard chống bấm đúp cấp batch.</summary>
+    private bool _syncSelectedRunning;
+
+    /// <summary>
+    /// "Kiểm tra đã chọn" (HÀNG LOẠT) — với MỌI tài khoản đang tick: phiên đã chạy → kiểm tra ngay; phiên
+    /// chưa mở → tự mở trang bán hàng, chờ sẵn sàng rồi kiểm tra (dùng chung <see cref="RunOrAutoStartAsync"/>
+    /// per-account). Các tài khoản chạy SONG SONG; mỗi lượt độc lập lỗi. Guard <see cref="_checkSelectedRunning"/>
+    /// chặn bấm đúp cả loạt (lượt trước chưa xong → bỏ qua nhẹ nhàng).
+    /// </summary>
+    [RelayCommand]
+    private async Task CheckSelectedAsync()
+    {
+        if (_checkSelectedRunning)
+        {
+            return;
+        }
+
+        _checkSelectedRunning = true;
+        try
+        {
+            await RunSelectedBatchAsync("kiểm tra đơn", s => s.CheckOrdersAsync());
+        }
+        finally
+        {
+            _checkSelectedRunning = false;
+        }
+    }
+
+    /// <summary>
+    /// "Sync đã chọn" (HÀNG LOẠT) — với MỌI tài khoản đang tick: phiên đã chạy → sync ngay; phiên chưa mở →
+    /// tự mở trang bán hàng, chờ sẵn sàng rồi sync (mẫu <see cref="CheckSelectedAsync"/>). Song song, độc lập
+    /// lỗi; guard <see cref="_syncSelectedRunning"/> chặn bấm đúp cả loạt.
+    /// </summary>
+    [RelayCommand]
+    private async Task SyncSelectedAsync()
+    {
+        if (_syncSelectedRunning)
+        {
+            return;
+        }
+
+        _syncSelectedRunning = true;
+        try
+        {
+            await RunSelectedBatchAsync("sync đơn hàng", s => s.SyncOrdersAsync());
+        }
+        finally
+        {
+            _syncSelectedRunning = false;
+        }
+    }
+
+    /// <summary>
+    /// Chạy <paramref name="action"/> HÀNG LOẠT cho MỌI tài khoản đang tick, dùng chung luồng per-account
+    /// <see cref="RunOrAutoStartAsync"/> (tự mở phiên nếu chưa mở → chờ sẵn sàng → hành động).
+    /// <para>
+    /// Chụp danh sách <c>(accountId, email)</c> các dòng tick MỘT LẦN — TRƯỚC mọi await (bài học
+    /// <c>viewmodel-mutable-field-after-await</c>): KHÔNG giữ tham chiếu <see cref="AccountRowViewModel"/> qua
+    /// await, chỉ dùng cặp đã chụp. Rỗng → log "Chưa tick tài khoản nào." rồi thôi. Các tài khoản chạy SONG
+    /// SONG (<see cref="Task.WhenAll(IEnumerable{Task})"/>); MỖI lượt tự bọc try/catch + log lỗi theo email của
+    /// shop đó → một shop lỗi/timeout KHÔNG phá các shop khác (OCE khi app đóng cũng thoát sạch). Xong hết →
+    /// log tổng kết. Guard bấm-đúp per-account tái dùng <see cref="_autoStartingIds"/> trong RunOrAutoStartAsync.
+    /// </para>
+    /// </summary>
+    private async Task RunSelectedBatchAsync(string actionName, Func<IAccountSession, Task<bool>> action)
+    {
+        // Chụp (accountId, email) của các dòng ĐANG tick MỘT LẦN, trước mọi await.
+        var targets = Accounts
+            .Where(r => r.IsSelected)
+            .Select(r => (Id: r.Id, Email: r.Email))
+            .ToList();
+
+        if (targets.Count == 0)
+        {
+            _services.Log.Append(BatchLogSource, "Chưa tick tài khoản nào.");
+            return;
+        }
+
+        // Mỗi tài khoản một lượt per-account ĐỘC LẬP LỖI, chạy song song.
+        var runs = targets.Select(async target =>
+        {
+            try
+            {
+                await RunOrAutoStartAsync(target.Id, target.Email, actionName, action);
+            }
+            catch (Exception ex)
+            {
+                // Một shop lỗi/timeout KHÔNG phá các shop khác — nuốt + log theo email của shop đó.
+                _services.Log.Append(target.Email, $"Lỗi khi {actionName}: {ex.Message}");
+            }
+        });
+
+        await Task.WhenAll(runs);
+
+        _services.Log.Append(BatchLogSource, $"Đã {actionName} xong {targets.Count} tài khoản đã chọn.");
+    }
 
     /// <summary>
     /// Các tài khoản đang trong một lượt "tự mở phiên rồi chạy hành động" (Sync/Kiểm tra) — GUARD chống bấm
@@ -699,27 +824,24 @@ public partial class AccountsViewModel : ViewModelBase
     private readonly HashSet<long> _autoStartingIds = new();
 
     /// <summary>
-    /// Luồng dùng chung cho nút "Sync Đơn hàng" và "Kiểm tra": phiên ĐANG chạy → chạy
-    /// <paramref name="action"/> ngay (đường cũ, giữ nguyên hành vi); phiên CHƯA mở → tự "Mở trang bán hàng"
-    /// (qua manager, chạy nền) rồi CHỜ phiên "sẵn sàng thao tác" (đăng nhập xong + đọc số đơn lần đầu — xem
-    /// <see cref="IsSessionReadyForActions"/>) tối đa 5 phút mới chạy hành động.
+    /// Luồng per-account dùng chung cho nút đơn ("Sync Đơn hàng" / "Kiểm tra") VÀ các lệnh HÀNG LOẠT
+    /// (<see cref="CheckSelectedAsync"/> / <see cref="SyncSelectedAsync"/> gọi cho từng tài khoản đã tick):
+    /// phiên ĐANG chạy → chạy <paramref name="action"/> ngay (đường cũ, giữ nguyên hành vi); phiên CHƯA mở →
+    /// tự "Mở trang bán hàng" (qua manager, chạy nền) rồi CHỜ phiên "sẵn sàng thao tác" (đăng nhập xong + đọc
+    /// số đơn lần đầu — xem <see cref="IsSessionReadyForActions"/>) tối đa 5 phút mới chạy hành động.
     /// <para>
-    /// Chụp <c>accountId</c> + <c>email</c> TRƯỚC mọi await (bài học <c>viewmodel-mutable-field-after-await</c>):
-    /// toàn bộ luồng bám theo TÀI KHOẢN LÚC BẤM (session theo accountId), KHÔNG đọc lại SelectedRow/_editingId
-    /// để quyết định. So <c>_editingId == accountId</c> về sau CHỈ để quyết có cập nhật ô hiển thị chung
-    /// (BusyStatus) hay không (người dùng có thể đã chuyển chọn sang tài khoản khác). KHÔNG dùng
+    /// <paramref name="accountId"/> + <paramref name="email"/> do NGƯỜI GỌI chụp TRƯỚC mọi await (bài học
+    /// <c>viewmodel-mutable-field-after-await</c>) — nút đơn chụp từ <c>_editingId</c>, nút hàng loạt chụp từng
+    /// dòng tick. Toàn bộ luồng bám theo TÀI KHOẢN ĐÓ (session theo accountId), KHÔNG đọc lại
+    /// SelectedRow/_editingId để quyết định. So <c>_editingId == accountId</c> về sau CHỈ để quyết có cập nhật ô
+    /// hiển thị chung (BusyStatus) hay không (người dùng có thể đã chuyển chọn sang tài khoản khác). KHÔNG dùng
     /// ConfigureAwait(false) để mọi continuation ở lại UI thread → set BusyStatus + đụng guard HashSet an toàn.
     /// </para>
     /// </summary>
-    private async Task RunOrAutoStartAsync(string actionName, Func<IAccountSession, Task<bool>> action)
+    private async Task RunOrAutoStartAsync(
+        long accountId, string email, string actionName, Func<IAccountSession, Task<bool>> action)
     {
-        // Chụp TRƯỚC mọi await.
-        if (_editingId is not long accountId)
-        {
-            return; // không có tài khoản đã lưu đang mở (phòng hờ — nút đã disable khi IsNew/không chọn)
-        }
-
-        var email = _services.Accounts.GetById(accountId)?.Email ?? EditEmail;
+        // accountId + email đã do NGƯỜI GỌI chụp trước mọi await — hàm này KHÔNG đọc _editingId để lấy chúng.
 
         // Phiên đã SẴN SÀNG (đăng nhập xong + đọc số lần đầu của lần mở hiện tại) → chạy hành động ngay như
         // cũ. Dùng cờ ReadyForActions (KHÔNG chỉ State==Running): phiên đang "Đang tự đăng nhập..." vẫn là
@@ -732,10 +854,13 @@ public partial class AccountsViewModel : ViewModelBase
         }
 
         // Phiên chưa sẵn sàng (null/Stopped/Error/Opening/đang-login) → tự mở (idempotent) rồi chờ sẵn sàng.
-        // Guard chống bấm đúp.
+        // Guard chống bấm đúp: đã có lượt auto-start cho tài khoản này đang chờ → bỏ qua nhẹ nhàng NHƯNG để
+        // lại DẤU VẾT log (kẻo bấm lượt 2 giữa lúc đang chờ mở phiên bị nuốt âm thầm → tưởng đã chạy).
         if (!_autoStartingIds.Add(accountId))
         {
-            return; // đã có lượt auto-start cho tài khoản này đang chờ → bỏ qua nhẹ nhàng
+            _services.Log.Append(email,
+                $"Đang chờ mở phiên cho tài khoản này — bỏ qua lượt {actionName} lần này (thử lại sau khi phiên sẵn sàng).");
+            return;
         }
 
         try

@@ -606,4 +606,33 @@ public class AccountsViewModelTests
         Assert.Equal(expected, AccountsViewModel.IsSessionReadyForActions(state, ready));
     }
 
+    // ===== HÀNG LOẠT: không tick tài khoản nào → command thoát ngay, KHÔNG mở phiên nào =====
+    // (đường "chụp danh sách rỗng → thôi" của RunSelectedBatchAsync; không cần Brave.)
+    [Fact]
+    public async Task CheckSelected_KhongTick_KhongMoPhien()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        // Không tick dòng nào → không có mục tiêu.
+        await vm.CheckSelectedCommand.ExecuteAsync(null);
+
+        Assert.Empty(services.Sessions.Active);
+    }
+
+    [Fact]
+    public async Task SyncSelected_KhongTick_KhongMoPhien()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        services.Accounts.Insert(new Account { Email = "a@mail.com", Password = "p" });
+
+        var vm = new AccountsViewModel(services);
+        await vm.SyncSelectedCommand.ExecuteAsync(null);
+
+        Assert.Empty(services.Sessions.Active);
+    }
+
 }

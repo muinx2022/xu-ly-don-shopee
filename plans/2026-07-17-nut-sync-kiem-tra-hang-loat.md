@@ -1,7 +1,7 @@
 # Plan: Nút "Kiểm tra" & "Sync" HÀNG LOẠT ở panel danh sách tài khoản (áp dụng cho các tài khoản đang tick)
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** chờ (làm SAU khi plan `2026-07-17-nut-sync-kiem-tra-tu-mo-phien.md` hoàn thành & merge — tái dùng helper của nó)
+- **Trạng thái:** đang làm
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
