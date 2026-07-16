@@ -1,7 +1,9 @@
 # Plan: Bố cục lại phần chi tiết tài khoản — dàn card 2 cột + nút icon kèm nhãn chữ
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng xem bằng mắt)
+
+> Ghi chú nghiệm thu: hàng nút chi tiết thực tế có **7 nút** (plan liệt kê thiếu nút `■ Dừng` = StopCommand/CanStopSeller). Executor GIỮ ĐỦ 7 nút, đặt nhãn `■ Dừng`, xếp nhóm phải giữa Sync và Xử lý đơn — đúng ràng buộc "giữ nguyên mọi Command". Nhãn cuối: `✓ Lưu` `↶ Hủy` | `⟳ Kiểm tra` `⇊ Sync` `■ Dừng` `► Xử lý đơn` `↗ Mở trang`. Form MaxWidth=1150 Stretch (căn giữa phần thừa). Fable: build 0 warning + 472/472 test (tổng sau merge), compiled-bindings xác nhận không gãy binding; merge sạch.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
 
 ## 1. Bối cảnh & mục tiêu
