@@ -1,8 +1,12 @@
 # Plan: Nút "Sync Đơn hàng" & "Kiểm tra" luôn bấm được — chưa mở phiên thì TỰ MỞ rồi thực hiện
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge về master, chờ người dùng smoke — đặc biệt ca phiên Error/relaunch)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus thực thi trong worktree: 2 nút Sync/Kiểm tra luôn enable khi đang xem tài khoản đã lưu; `RunOrAutoStartAsync` — phiên chưa mở thì tự Start (đường OpenSeller) → `WaitForSessionReadyAsync` chờ sẵn sàng ≤5' rồi chạy hành động; guard bấm đúp `_autoStartingIds`; không đọc trạng thái mutable sau await để quyết định luồng. Panel đối kháng bắt LỖI CAO: tín hiệu sẵn-sàng suy từ `ToShipCount != null` không kín (State=Running đặt trước login; ToShipCount cũ không reset khi relaunch → ready ảo → giẫm luồng tự-đăng-nhập). Đã sửa bằng cờ tường minh `ReadyForActions` (set false ở StartAsync + ĐẦU mỗi vòng mở/relaunch dòng 683 + watchdog proxy + finally/SetError; set true chỉ sau khi đọc số đơn lần đầu thành công dòng 806) — Fable tự đọc 6 điểm set cờ xác nhận kín ca relaunch. Build 0 warning + 468/468 test (tổng, sau merge). Đã merge `7d8e80a`, dọn worktree.
 
 ## 1. Bối cảnh & mục tiêu
 
