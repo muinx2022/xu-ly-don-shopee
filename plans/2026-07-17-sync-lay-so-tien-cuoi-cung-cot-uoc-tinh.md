@@ -1,7 +1,11 @@
 # Plan: Sync lấy thêm "Số tiền cuối cùng" từ trang chi tiết đơn → cột "Ước tính" ở màn Đơn hàng
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm (làm SAU khi `2026-07-17-man-don-hang-link-in-phieu.md` merge — đụng cùng OrdersView/OrderRowViewModel/ShopeeLoginService)
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng smoke — bước này CHẬM với shop nhiều đơn, lần đầu lâu)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus (worktree) làm đủ A/B/C: 2 cột `final_amount`/`final_amount_text` (EnsureColumn idempotent cho DB cũ) + COALESCE giữ số cũ khi update null + GetOrderSnsWithFinalAmount; SyncAllOrdersAsync nhận `IReadOnlySet<string>? ordersWithFinalAmount`, sau quét mỗi trang mở chi tiết đơn KHÁC "Đã hủy" & CHƯA có final_amount (click "Xem chi tiết" ưu tiên text → bắt tab mới, fallback NewPage+Goto) → đọc `[type='FinalAmount'] .amount` → đóng đúng tab chi tiết trong finally (không đụng tab danh sách gốc) → per-đơn độc lập lỗi, OCE ném xuyên; cột "Ước tính" sau "Tổng tiền" ở view + CSV (11→12 cột). Fable đọc bắt/đóng tab + COALESCE xác nhận; build 0 warning + 478/478 (tổng sau merge); panel đối kháng 0 finding thật (3 phát hiện rò-tab bị bác — edge case tab đến muộn, đóng theo khi browser đóng). Smoke: CHỜ NGƯỜI DÙNG.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
