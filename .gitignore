@@ -36,3 +36,6 @@ Thumbs.db
 
 # Ket qua publish cuc bo (workaround WDAC) - khong commit
 publish/
+
+# Claude Code local (settings local, worktrees, workflow scripts, tasks) - khong commit
+.claude/
