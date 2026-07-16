@@ -330,3 +330,41 @@ Chỉ đụng đúng `ShopeeLoginService.cs`; không commit (chờ Fable nghiệ
   có bounding box), kèm 2 dòng log ("Chờ nút In phiếu giao xuất hiện..." / "Nút In phiếu giao đã sẵn sàng").
   Phần bắt tab (`RunAndWaitForPageAsync`) + `DownloadAndPrintSlipAsync` GIỮ NGUYÊN. Build **0/0**, test
   **382 pass, 0 fail**. Chỉ đụng `ShopeeLoginService.cs`; không commit.
+
+### Sửa theo 3 lượt smoke tiếp (2026-07-15/16) — hoàn thiện luồng In phiếu + đóng modal
+
+Người dùng smoke thật 3 lượt nữa, ra 3 nhóm sửa (đều trong `ShopeeLoginService.cs`, riêng nhóm 2 thêm
+1 hàm thuần + test trong `ShopeeShippingNav.cs`/`ShopeeShippingNavTests.cs`):
+
+1. **Nút "In phiếu giao" trong modal có box nhưng bị lớp che → click không ăn (bước 6):** đổi
+   `WaitPrintButtonAsync` → `WaitPrintButtonClickableAsync` — ngoài "có bounding box" còn HIT-TEST tâm nút
+   bằng `IsPointOnElementAsync` (chỉ trả khi `elementFromPoint` tại nút đúng là nút → lớp che "đang tạo vận
+   đơn" đã tan). Bọc bước 6 thành VÒNG THỬ LẠI ~35s: mỗi vòng re-find nút TƯƠI (chống stale) → click bắt tab
+   qua `RunAndWaitForPageAsync` (timeout 8s/lần); chống double-tab bằng cờ `clicked` + nhận tab awbprint mở
+   muộn (`SafeUrlHasAwbprint`). Tổng quát hóa `WaitPrintButtonClickableAsync(page, textMatch, timeoutMs, ct)`
+   để dùng lại cho cả nút modal ("in phiếu giao") lẫn nút tab phiếu ("in phiếu").
+2. **Tab phiếu là HTML "Xem trước bản in" (nhãn SPX) có nút "In phiếu" RIÊNG — tải & in đúng cách
+   (`DownloadAndPrintSlipAsync`):**
+   - TẢI: ĐẢO thứ tự — ưu tiên CDP `Page.printToPDF` (render HTML nhãn thành PDF, `LooksPdf`-check) làm
+     CHÍNH; GET URL chỉ fallback (vẫn %PDF/content-type check). Lưu `D:\Phieu-giao-hang` như cũ.
+   - IN: THAY `window.print()` bằng CLICK nút "In phiếu" trên tab (kiểu người verified) — thêm hàm thuần
+     `IsPrintButtonText` (== "in phiếu", KHÔNG khớp "in phiếu giao") + 7 ca test; chờ nút bấm được bằng
+     `WaitPrintButtonClickableAsync(newPage, IsPrintButtonText, 15s, ct)` rồi `TryHumanClickVisibleAsync`
+     (mx/my riêng theo viewport tab). Không tìm/không bấm được → fallback `window.print()`
+     (`FirePrintFallbackAsync`). Với `--kiosk-printing` → in im lặng máy in mặc định.
+3. **Modal "Thông Tin Chi Tiết" trên tab chính KHÔNG tự đóng sau khi in → thêm bước đóng X:** cuối
+   `ProcessFirstOrderAsync`, sau `DownloadAndPrintSlipAsync`, gọi `CloseDetailModalAsync` (best-effort):
+   re-find modal TƯƠI (đã đóng → thôi) → dò nút X (`.eds-modal__close` → icon trong `.eds-modal__header` →
+   `[aria-label='Close'/'close'/'Đóng']`, chỉ nhận có box) → click verified → chờ modal biến mất ~5s; fallback
+   `Escape` 1 lần; vẫn còn → L cảnh báo (KHÔNG hạ Ok). Rồi mới `return Ok`.
+
+Mọi click nghiệp vụ (nút modal, dropoff, xác nhận, chuẩn bị, nút In phiếu tab, nút X) đều qua
+`TryHumanClickVisibleAsync` (hit-test verified). Chỉ có `Keyboard.PressAsync("Escape")` là thao tác bàn
+phím ĐÓNG modal (không phải click chuột nghiệp vụ — đã được duyệt). OCE rethrow giữ nguyên ở mọi khối ct.
+
+**Kiểm chứng sau 3 lượt:** `dotnet build` → **0 Warning, 0 Error** (không dead-code); `dotnet test --no-build`
+→ **389 pass, 0 fail** (382 nền + 7 ca `IsPrintButtonText`). Không bị WDAC chặn. Phạm vi: `ShopeeLoginService.cs`,
+`ShopeeShippingNav.cs`, `ShopeeShippingNavTests.cs`. KHÔNG commit (chờ Fable nghiệm thu lại).
+
+**CHƯA smoke được các nhánh mới** (không có phiên/đơn thật ở đây): thứ tự tải mới, click nút "In phiếu" trên
+tab, và đóng modal X — cần người dùng smoke 1 đơn, gửi lại log + kiểm `D:\Phieu-giao-hang`.

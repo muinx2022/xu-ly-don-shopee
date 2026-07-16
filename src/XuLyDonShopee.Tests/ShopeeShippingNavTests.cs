@@ -318,6 +318,20 @@ public class ShopeeShippingNavTests
         Assert.Equal(expected, ShopeeShippingNav.IsPrintSlipButtonText(input));
     }
 
+    // ===== IsPrintButtonText: nút "In phiếu" trên TAB PHIẾU — CHÍNH XÁC, KHÔNG khớp "in phiếu giao" =====
+    [Theory]
+    [InlineData("In phiếu", true)]
+    [InlineData("  in  phiếu \n", true)]
+    [InlineData("IN PHIẾU", true)]
+    [InlineData("In phiếu giao", false)]   // nút trong modal — KHÔNG khớp
+    [InlineData("In", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsPrintButtonText_KhopChuanHoa(string? input, bool expected)
+    {
+        Assert.Equal(expected, ShopeeShippingNav.IsPrintButtonText(input));
+    }
+
     // ===== IsDropoffTitleText: "chứa" tự mang hàng tới bưu cục =====
     [Theory]
     [InlineData("Tôi sẽ tự mang hàng tới Bưu cục", true)]

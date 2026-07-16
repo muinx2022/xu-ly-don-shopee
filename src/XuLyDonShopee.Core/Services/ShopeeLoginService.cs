@@ -2184,39 +2184,65 @@ public class ShopeeLoginService
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false); // "đọc modal"
 
                 // 6) Bấm "In phiếu giao" + BẮT tab mới + tải + in + đóng.
-                // SAU khi Xác nhận, modal "Thông Tin Chi Tiết" đổi trạng thái (Shopee tạo vận đơn) → nút "In
-                // phiếu giao" chỉ HIỆN MUỘN sau một lúc. Phải POLL tới khi nút thật sự hiện & hiển thị được
-                // (query PAGE-level vì modal có thể re-render làm handle detailModal stale), timeout 30s.
-                L("Chờ nút In phiếu giao xuất hiện (Shopee đang tạo vận đơn)...");
-                var printBtn = await WaitPrintButtonAsync(page, 30000, ct).ConfigureAwait(false);
-                if (printBtn is null)
-                {
-                    return ArrangeShipmentResult.PrintFailed;
-                }
-                L("Nút In phiếu giao đã sẵn sàng, chuẩn bị bấm.");
-
-                // Bắt tab MỚI (bắt cả window.open) — click nút In phiếu giao NGAY trong action để bắt token 1 lần.
+                // SAU khi Xác nhận, modal "Thông Tin Chi Tiết" đổi trạng thái (Shopee tạo vận đơn): nút "In
+                // phiếu giao" HIỆN MUỘN và lúc mới hiện còn bị LỚP CHE "đang tạo vận đơn" đè (có bounding box
+                // nhưng hit-test fail → click không ăn), lại có thể STALE khi modal re-render. → Vòng THỬ LẠI:
+                // mỗi lần RE-FIND nút TƯƠI, chỉ chờ tới khi nút THẬT SỰ BẤM ĐƯỢC (hit-test pass) rồi click +
+                // bắt tab; tối đa ~35s. Chống double-tab: nếu click đã landed mà tab mở muộn → nhận tab đó.
+                L("Chờ nút In phiếu giao bấm được (Shopee đang tạo vận đơn)...");
                 IPage? newPage = null;
-                try
+                var printDeadline = DateTime.UtcNow.AddSeconds(35);
+                while (newPage is null && DateTime.UtcNow < printDeadline)
                 {
-                    newPage = await _context.RunAndWaitForPageAsync(async () =>
+                    ct.ThrowIfCancellationRequested();
+
+                    // Chờ nút TƯƠI thật sự bấm được (không chỉ có box). Query lại mỗi vòng → không giữ handle stale.
+                    var btn = await WaitPrintButtonClickableAsync(page, ShopeeShippingNav.IsPrintSlipButtonText, 8000, ct).ConfigureAwait(false);
+                    if (btn is null)
                     {
-                        (mx, my, _) = await TryHumanClickVisibleAsync(page, printBtn, mx, my, rng, ct).ConfigureAwait(false);
-                    }, new BrowserContextRunAndWaitForPageOptions { Timeout = 20000 }).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Không bắt được tab (click không ăn / không mở tab) → PrintFailed.
-                    return ArrangeShipmentResult.PrintFailed;
+                        await Task.Delay(rng.Next(500, 1200), ct).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    clicked = false; // tái dùng biến 'clicked' đã khai báo ở bước trên (tránh trùng tên scope)
+                    try
+                    {
+                        // Bắt tab MỚI (bắt cả window.open) — click nút NGAY trong action để bắt token 1 lần.
+                        newPage = await _context.RunAndWaitForPageAsync(async () =>
+                        {
+                            (mx, my, clicked) = await TryHumanClickVisibleAsync(page, btn, mx, my, rng, ct).ConfigureAwait(false);
+                        }, new BrowserContextRunAndWaitForPageOptions { Timeout = 8000 }).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch
+                    {
+                        // Hết 8s chưa bắt được tab. Nếu click ĐÃ landed (clicked=true) thì tab có thể mở MUỘN
+                        // → nhận tab awbprint đã mở để KHÔNG bấm lại (tránh double-tab). Chưa có → thử lại vòng sau.
+                        if (clicked)
+                        {
+                            try { newPage = _context.Pages.FirstOrDefault(p => p != page && SafeUrlHasAwbprint(p)); }
+                            catch { /* context ngắt — thử vòng sau */ }
+                        }
+                        if (newPage is null)
+                        {
+                            await Task.Delay(rng.Next(600, 1400), ct).ConfigureAwait(false);
+                        }
+                    }
                 }
 
                 if (newPage is null)
                 {
                     return ArrangeShipmentResult.PrintFailed;
                 }
+                L("Đã bấm In phiếu giao, bắt được tab phiếu.");
 
                 // Từ đây: TẢI/IN best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
                 await DownloadAndPrintSlipAsync(newPage, downloadDir, orderCode, L, ct).ConfigureAwait(false);
+
+                // Đóng modal "Thông Tin Chi Tiết" bằng nút X (modal KHÔNG tự đóng sau khi in) rồi mới coi là
+                // xong đơn — best-effort, có log; KHÔNG hạ Ok nếu không đóng được (đơn đã arrange/in).
+                await CloseDetailModalAsync(page, rng, L, ct).ConfigureAwait(false);
+                L("Đã xử lý xong đơn (đóng phiếu chi tiết).");
                 return ArrangeShipmentResult.Ok;
             }
             catch (OperationCanceledException)
@@ -2238,10 +2264,12 @@ public class ShopeeLoginService
             => b is { Length: > 4 } && b[0] == 0x25 && b[1] == 0x50 && b[2] == 0x44 && b[3] == 0x46;
 
         /// <summary>
-        /// TẢI phiếu về <paramref name="downloadDir"/> + gửi lệnh in máy in mặc định (im lặng) rồi ĐÓNG tab
-        /// — <b>best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được arrange). Tải 2 tầng:
-        /// (a) GET URL qua <c>APIRequest</c> (context đã đăng nhập); (b) fallback CDP <c>Page.printToPDF</c>.
-        /// In bằng <c>window.print()</c> (đã có cờ <c>--kiosk-printing</c> → in thẳng máy in mặc định).
+        /// Trên TAB PHIẾU (trang HTML "Xem trước bản in"): TẢI phiếu về <paramref name="downloadDir"/> → gửi
+        /// lệnh IN → ĐÓNG tab — <b>best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được
+        /// arrange). Tải: (a) CHÍNH = CDP <c>Page.printToPDF</c> (render HTML nhãn thành PDF, có
+        /// <see cref="LooksPdf"/>-check); (b) fallback GET URL qua <c>APIRequest</c> (cũng %PDF/content-type
+        /// check). In: CLICK nút "In phiếu" trên tab (kiểu người verified; <c>--kiosk-printing</c> → in im
+        /// lặng máy in mặc định), fallback <c>window.print()</c> nếu không bấm được nút.
         /// </summary>
         private async Task DownloadAndPrintSlipAsync(
             IPage newPage, string downloadDir, string orderCode, Action<string> L, CancellationToken ct)
@@ -2274,92 +2302,119 @@ public class ShopeeLoginService
             }
 
             // ===== TẢI (best-effort) =====
+            // Tab awbprint là TRANG HTML "Xem trước bản in" (nhãn SPX) → GET URL chỉ trả HTML (bị %PDF-check
+            // loại). Đường TIN CẬY là RENDER PDF: ưu tiên CDP Page.printToPDF (render HTML nhãn thành PDF
+            // thật) làm chính; GET URL chỉ là fallback (vẫn %PDF/content-type check để không ghi rác).
             bool downloaded = false;
-            if (path.Length > 0 && url.Length > 0)
+            if (path.Length > 0)
             {
-                // (a) GET URL qua context đã đăng nhập. CHỈ nhận khi THỰC SỰ là PDF (content-type "pdf" hoặc
-                //     magic bytes %PDF): tab awbprint nhiều khả năng là HTML và token first_time=1 dùng 1 lần
-                //     (tab đã tự load) → GET lần 2 dễ trả HTML lỗi/redirect đăng nhập 200-OK >1000 byte. KHÔNG
-                //     được ghi rác vào .pdf, và KHÔNG set downloaded (để fallback render PDF chạy tiếp).
+                // (a) CDP Page.printToPDF (CHÍNH) — render trang phiếu (HTML) thành PDF, có %PDF-check.
                 try
                 {
-                    var resp = await newPage.APIRequest.GetAsync(url).ConfigureAwait(false);
-                    if (resp.Ok)
+                    var cdp = await _context.NewCDPSessionAsync(newPage).ConfigureAwait(false);
+                    var res = await cdp.SendAsync("Page.printToPDF", new Dictionary<string, object>
                     {
-                        var body = await resp.BodyAsync().ConfigureAwait(false);
-                        var isPdf = body is { Length: > 0 }
-                            && ((resp.Headers.TryGetValue("content-type", out var ctype)
-                                    && ctype.Contains("pdf", StringComparison.OrdinalIgnoreCase))
-                                || LooksPdf(body));
-                        if (isPdf)
+                        ["printBackground"] = true,
+                        ["preferCSSPageSize"] = true,
+                    }).ConfigureAwait(false);
+
+                    // SendAsync trả JsonElement? (null nếu lệnh không có payload) → lấy "data" (base64) an toàn.
+                    string? data = res is JsonElement je && je.TryGetProperty("data", out var d)
+                        ? d.GetString()
+                        : null;
+                    if (!string.IsNullOrEmpty(data))
+                    {
+                        var bytes = Convert.FromBase64String(data);
+                        if (LooksPdf(bytes))
                         {
-                            await File.WriteAllBytesAsync(path, body!, ct).ConfigureAwait(false);
+                            await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
                             downloaded = true;
-                            L($"Đã tải phiếu: {path} ({body!.Length} bytes).");
+                            L($"Đã tải phiếu (render PDF): {path} ({bytes.Length} bytes).");
                         }
                         else
                         {
-                            L("GET URL trả nội dung KHÔNG phải PDF (token có thể đã tiêu / HTML) — bỏ, thử render PDF.");
+                            L("Render PDF trả dữ liệu KHÔNG phải PDF — bỏ, thử GET URL.");
                         }
                     }
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
-                    L("Tải qua GET URL chưa được: " + ex.Message);
+                    L("Render PDF chưa được: " + ex.Message);
                 }
 
-                // (b) Fallback CDP Page.printToPDF (render trang thành PDF).
-                if (!downloaded)
+                // (b) Fallback GET URL qua context đã đăng nhập. CHỈ nhận khi THỰC SỰ là PDF (content-type
+                //     "pdf" hoặc magic bytes %PDF) — token first_time=1 dùng 1 lần nên GET lần 2 dễ trả
+                //     HTML/redirect 200-OK: KHÔNG được ghi rác vào .pdf.
+                if (!downloaded && url.Length > 0)
                 {
                     try
                     {
-                        var cdp = await _context.NewCDPSessionAsync(newPage).ConfigureAwait(false);
-                        var res = await cdp.SendAsync("Page.printToPDF", new Dictionary<string, object>
+                        var resp = await newPage.APIRequest.GetAsync(url).ConfigureAwait(false);
+                        if (resp.Ok)
                         {
-                            ["printBackground"] = true,
-                            ["preferCSSPageSize"] = true,
-                        }).ConfigureAwait(false);
-
-                        // SendAsync trả JsonElement? (null nếu lệnh không có payload) → lấy "data" (base64) an toàn.
-                        string? data = res is JsonElement je && je.TryGetProperty("data", out var d)
-                            ? d.GetString()
-                            : null;
-                        if (!string.IsNullOrEmpty(data))
-                        {
-                            var bytes = Convert.FromBase64String(data);
-                            if (LooksPdf(bytes))
+                            var body = await resp.BodyAsync().ConfigureAwait(false);
+                            var isPdf = body is { Length: > 0 }
+                                && ((resp.Headers.TryGetValue("content-type", out var ctype)
+                                        && ctype.Contains("pdf", StringComparison.OrdinalIgnoreCase))
+                                    || LooksPdf(body));
+                            if (isPdf)
                             {
-                                await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
+                                await File.WriteAllBytesAsync(path, body!, ct).ConfigureAwait(false);
                                 downloaded = true;
-                                L($"Đã tải phiếu (render PDF fallback): {path} ({bytes.Length} bytes).");
+                                L($"Đã tải phiếu (GET URL fallback): {path} ({body!.Length} bytes).");
                             }
                             else
                             {
-                                L("Render PDF fallback trả dữ liệu KHÔNG phải PDF — bỏ, không ghi file.");
+                                L("GET URL trả nội dung KHÔNG phải PDF (HTML/redirect) — bỏ.");
                             }
                         }
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
-                        L("Render PDF fallback chưa được: " + ex.Message);
+                        L("Tải qua GET URL chưa được: " + ex.Message);
                     }
                 }
             }
 
             if (!downloaded)
             {
-                L("Cảnh báo: CHƯA tải được phiếu (cả GET URL lẫn render PDF) — đơn vẫn đã được arrange.");
+                L("Cảnh báo: CHƯA tải được phiếu (cả render PDF lẫn GET URL) — đơn vẫn đã được arrange.");
             }
 
-            // ===== IN (best-effort): window.print() → in im lặng máy in mặc định (--kiosk-printing). =====
+            // ===== IN (best-effort): CLICK nút "In phiếu" RIÊNG trên tab phiếu (kiểu người, verified). Tab
+            //   phiếu là trang HTML có nút "In phiếu" (data-testid='print-button', text "In phiếu") kích hoạt
+            //   lệnh in; với --kiosk-printing → in im lặng máy in mặc định. Chờ nút bấm được rồi click qua
+            //   TryHumanClickVisibleAsync (mx/my riêng theo viewport tab phiếu). Không tìm/không bấm được →
+            //   fallback window.print(). =====
             try
             {
-                var printTask = newPage.EvaluateAsync("() => window.print()");
-                // Chặn treo: window.print() thường trả nhanh khi kiosk-printing, nhưng bọc timeout đề phòng.
-                await Task.WhenAny(printTask, Task.Delay(5000, ct)).ConfigureAwait(false);
-                L("Đã gửi lệnh in (window.print, in im lặng máy in mặc định).");
+                var printBtn = await WaitPrintButtonClickableAsync(
+                    newPage, ShopeeShippingNav.IsPrintButtonText, 15000, ct).ConfigureAwait(false);
+                if (printBtn is not null)
+                {
+                    var rng2 = new Random();
+                    var vp2 = newPage.ViewportSize;
+                    double m2x = (vp2 is not null ? vp2.Width : 1280) * rng2.NextDouble();
+                    double m2y = (vp2 is not null ? vp2.Height : 720) * rng2.NextDouble();
+                    bool printed;
+                    (m2x, m2y, printed) = await TryHumanClickVisibleAsync(newPage, printBtn, m2x, m2y, rng2, ct).ConfigureAwait(false);
+                    if (printed)
+                    {
+                        L("Đã bấm In phiếu (in máy in mặc định).");
+                    }
+                    else
+                    {
+                        await FirePrintFallbackAsync(newPage, ct).ConfigureAwait(false);
+                        L("Bấm In phiếu chưa ăn — dùng window.print() (in im lặng).");
+                    }
+                }
+                else
+                {
+                    await FirePrintFallbackAsync(newPage, ct).ConfigureAwait(false);
+                    L("Không thấy nút In phiếu — dùng window.print() (in im lặng).");
+                }
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -2377,6 +2432,114 @@ public class ShopeeLoginService
             {
                 L("Đóng tab phiếu chưa được: " + ex.Message);
             }
+        }
+
+        /// <summary>Gọi <c>window.print()</c> trên <paramref name="page"/> bọc timeout ~5s chống treo (với
+        /// <c>--kiosk-printing</c> → in im lặng máy in mặc định). Fallback khi không click được nút "In phiếu".</summary>
+        private static async Task FirePrintFallbackAsync(IPage page, CancellationToken ct)
+        {
+            var printTask = page.EvaluateAsync("() => window.print()");
+            await Task.WhenAny(printTask, Task.Delay(5000, ct)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Đóng modal "Thông Tin Chi Tiết" bằng nút <b>X góc phải</b> (modal KHÔNG tự đóng sau khi in) rồi
+        /// trang trở về danh sách "Tất cả". <b>Best-effort, KHÔNG ném:</b> re-find modal TƯƠI — đã đóng →
+        /// thôi; tìm nút X (nhiều selector, chỉ nhận có bounding box) → click KIỂU NGƯỜI verified → chờ modal
+        /// biến mất ~5s. Không tìm/không đóng được → thử <c>Escape</c> MỘT lần (đóng modal, KHÔNG phải click
+        /// nghiệp vụ chuột) rồi kiểm lại; vẫn còn → L cảnh báo (KHÔNG hạ Ok — đơn đã arrange/in).
+        /// </summary>
+        private static async Task CloseDetailModalAsync(IPage page, Random rng, Action<string> L, CancellationToken ct)
+        {
+            try
+            {
+                var modal = await FindModalByTitleAsync(page, ShopeeShippingNav.IsDetailModalTitle).ConfigureAwait(false);
+                if (modal is null)
+                {
+                    return; // đã đóng
+                }
+
+                // mx/my riêng (viewport page) để chuột cong hợp lệ.
+                var vp = page.ViewportSize;
+                double mx = (vp is not null ? vp.Width : 1280) * rng.NextDouble();
+                double my = (vp is not null ? vp.Height : 720) * rng.NextDouble();
+
+                var closeBtn = await FindDetailModalCloseButtonAsync(modal).ConfigureAwait(false);
+                if (closeBtn is not null)
+                {
+                    await TryHumanClickVisibleAsync(page, closeBtn, mx, my, rng, ct).ConfigureAwait(false);
+                    if (await WaitModalGoneAsync(page, ShopeeShippingNav.IsDetailModalTitle, 5000, ct).ConfigureAwait(false))
+                    {
+                        return;
+                    }
+                }
+
+                // Fallback: Escape MỘT lần rồi kiểm lại.
+                try { await page.Keyboard.PressAsync("Escape").ConfigureAwait(false); } catch { /* bỏ qua */ }
+                if (await WaitModalGoneAsync(page, ShopeeShippingNav.IsDetailModalTitle, 3000, ct).ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                L("Không đóng được phiếu chi tiết — modal có thể còn mở, kiểm tra tay.");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* best-effort — nuốt lỗi (context ngắt) */ }
+        }
+
+        /// <summary>
+        /// Dò nút X đóng trong modal "Thông Tin Chi Tiết" (thử lần lượt, chỉ nhận cái có bounding box):
+        /// (a) <c>.eds-modal__close</c>; (b) icon trong <c>.eds-modal__header</c> (<c>.eds-icon</c>/<c>i</c>/
+        /// <c>svg</c>); (c) <c>[aria-label='Close'|'close'|'Đóng']</c>. Không thấy → <c>null</c>.
+        /// </summary>
+        private static async Task<IElementHandle?> FindDetailModalCloseButtonAsync(IElementHandle modal)
+        {
+            string[] selectors =
+            {
+                ".eds-modal__close",
+                ".eds-modal__header .eds-icon",
+                ".eds-modal__header i",
+                ".eds-modal__header svg",
+                "[aria-label='Close']",
+                "[aria-label='close']",
+                "[aria-label='Đóng']",
+            };
+
+            foreach (var sel in selectors)
+            {
+                try
+                {
+                    var el = await modal.QuerySelectorAsync(sel).ConfigureAwait(false);
+                    if (el is not null && await el.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                    {
+                        return el;
+                    }
+                }
+                catch { /* selector không hợp lệ / detached — thử selector kế */ }
+            }
+
+            return null;
+        }
+
+        /// <summary>Chờ modal có tiêu đề khớp <paramref name="titleMatch"/> BIẾN MẤT (đóng), poll tới hết
+        /// <paramref name="timeoutMs"/>. Đóng → <c>true</c>; hết giờ (còn) → <c>false</c>.</summary>
+        private static async Task<bool> WaitModalGoneAsync(
+            IPage page, Func<string?, bool> titleMatch, int timeoutMs, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+                if (await FindModalByTitleAsync(page, titleMatch).ConfigureAwait(false) is null)
+                {
+                    return true;
+                }
+
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return false;
         }
 
         /// <summary>
@@ -2645,44 +2808,73 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Chờ nút "In phiếu giao" xuất hiện &amp; HIỂN THỊ (Shopee tạo vận đơn xong nút mới hiện muộn), poll
-        /// tới hết <paramref name="timeoutMs"/>. Query PAGE-level (KHÔNG giữ handle modal có thể stale khi
-        /// modal re-render lúc tạo vận đơn). Ưu tiên <c>button[data-testid='print-button']</c> có bounding
-        /// box; fallback duyệt mọi <c>button</c> khớp <see cref="ShopeeShippingNav.IsPrintSlipButtonText"/> có
-        /// bounding box. Không thấy → <c>null</c>.
+        /// Chờ nút in (<c>button[data-testid='print-button']</c>) tới khi <b>THẬT SỰ BẤM ĐƯỢC</b> (không chỉ
+        /// có bounding box): nút có thể hiện MUỘN và lúc mới hiện còn bị LỚP CHE đè (có box nhưng
+        /// <c>elementFromPoint</c> tại nút trả lớp overlay → click không ăn). Poll tới hết
+        /// <paramref name="timeoutMs"/>: RE-FIND nút TƯƠI mỗi vòng (query PAGE-level, không giữ handle stale),
+        /// tìm được candidate có box → tính tâm (cx,cy) rồi HIT-TEST bằng <see cref="IsPointOnElementAsync"/>;
+        /// CHỈ trả khi hit-test PASS (lớp che đã tan). Ưu tiên <c>button[data-testid='print-button']</c>,
+        /// fallback button khớp <paramref name="textMatch"/> có bounding box. Dùng cho CẢ nút "In phiếu giao"
+        /// trong modal (<see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>) LẪN nút "In phiếu" trên tab
+        /// phiếu (<see cref="ShopeeShippingNav.IsPrintButtonText"/>). Không đạt → <c>null</c>.
         /// </summary>
-        private static async Task<IElementHandle?> WaitPrintButtonAsync(IPage page, int timeoutMs, CancellationToken ct)
+        private static async Task<IElementHandle?> WaitPrintButtonClickableAsync(
+            IPage page, Func<string?, bool> textMatch, int timeoutMs, CancellationToken ct)
         {
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             do
             {
                 ct.ThrowIfCancellationRequested();
 
-                var el = await FirstVisibleByBoxAsync(page, "button[data-testid='print-button']", ct).ConfigureAwait(false);
-                if (el is not null)
+                IElementHandle? cand = await FirstVisibleByBoxAsync(page, "button[data-testid='print-button']", ct).ConfigureAwait(false);
+                if (cand is null)
                 {
-                    return el;
-                }
-
-                try
-                {
-                    var buttons = await page.QuerySelectorAllAsync("button").ConfigureAwait(false);
-                    foreach (var b in buttons)
+                    try
                     {
-                        if (ShopeeShippingNav.IsPrintSlipButtonText(await b.InnerTextAsync().ConfigureAwait(false))
-                            && await b.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                        var buttons = await page.QuerySelectorAllAsync("button").ConfigureAwait(false);
+                        foreach (var b in buttons)
                         {
-                            return b;
+                            if (textMatch(await b.InnerTextAsync().ConfigureAwait(false))
+                                && await b.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                            {
+                                cand = b;
+                                break;
+                            }
                         }
                     }
+                    catch { /* chưa render — thử vòng sau */ }
                 }
-                catch { /* chưa render — thử vòng sau */ }
+
+                if (cand is not null)
+                {
+                    try
+                    {
+                        var box = await cand.BoundingBoxAsync().ConfigureAwait(false);
+                        if (box is not null)
+                        {
+                            double cx = box.X + box.Width / 2.0, cy = box.Y + box.Height / 2.0;
+                            if (await IsPointOnElementAsync(cand, cx, cy).ConfigureAwait(false))
+                            {
+                                return cand; // nút hit-testable (lớp che đã tan) → bấm được
+                            }
+                        }
+                    }
+                    catch { /* handle stale (modal re-render) → tìm lại vòng sau */ }
+                }
 
                 await Task.Delay(400, ct).ConfigureAwait(false);
             }
             while (DateTime.UtcNow < deadline);
 
             return null;
+        }
+
+        /// <summary>True nếu URL của trang <paramref name="p"/> chứa "awbprint" (tab phiếu giao). Nuốt lỗi
+        /// (context ngắt / page đóng) → false. Dùng nhận tab phiếu mở MUỘN để tránh bấm In lần 2 (double-tab).</summary>
+        private static bool SafeUrlHasAwbprint(IPage p)
+        {
+            try { return p.Url.Contains("awbprint", StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
         }
 
         /// <summary>
