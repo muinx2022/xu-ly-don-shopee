@@ -187,13 +187,6 @@ public static class ShopeeShippingNav
         => NormalizeUiText(s) == "in phiếu giao";
 
     /// <summary>
-    /// True nếu text (đã chuẩn hóa) chính là "in phiếu" — nút "In phiếu" RIÊNG trên TAB PHIẾU (trang HTML
-    /// "Xem trước bản in", kích hoạt lệnh in). KHỚP CHÍNH XÁC, KHÔNG khớp "in phiếu giao" (nút trong modal).
-    /// </summary>
-    public static bool IsPrintButtonText(string? s)
-        => NormalizeUiText(s) == "in phiếu";
-
-    /// <summary>
     /// True nếu tiêu đề lựa chọn (đã chuẩn hóa) <b>chứa</b> "tự mang hàng tới bưu cục" — option "Tôi sẽ tự
     /// mang hàng tới Bưu cục" trong modal "Giao Đơn Hàng". Dùng "chứa" vì text option có thể kèm chữ khác
     /// ("Tôi sẽ ..."). Các option khác (giao cho đơn vị vận chuyển...) không chứa chuỗi này.

@@ -1,7 +1,7 @@
 # Plan: Lưu phiếu giao về thư mục (PNG chụp màn hình + PDF thật) thay vì in ngay
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng smoke với đơn thật)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -76,4 +76,6 @@ Mục tiêu: sau khi tab phiếu mở, **chờ nội dung phiếu thật sự hi
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus thực thi đủ bước 1–6 (6 file sửa, đúng phạm vi): `SaveSlipAsync` thay `DownloadAndPrintSlipAsync` (chờ Load 10s → poll nội dung ≤25s → log chẩn đoán DOM → chụp PNG FullPage/retry → PDF e1 src khung nhúng/e2 printToPDF+ngưỡng 3000/e3 GET URL → đóng tab, không còn lệnh in); xóa `FirePrintFallbackAsync`, `IsPrintButtonText`, cờ `--kiosk-printing` + test tương ứng; 2 vá log (`clickedPrint`, catch tổng log `ex.Message`). Khác plan (đã duyệt): đọc kết quả probe bằng `EvaluateAsync<string>` + `JSON.stringify`; prefix log "Tab phiếu DOM:".
+
+Nghiệm thu (Fable): tự build 0 warning + 382/382 test xanh (WDAC không chặn); panel rà soát đối kháng 2/3 phiếu chốt 3 lỗi thật → đã gửi Opus sửa và kiểm lại: (1) [cao] src khung nhúng bị cắt 120 ký tự trong JS rồi đem GET → giờ JS trả src nguyên vẹn, chỉ cắt khi ghi log; (2) refresh `newPage.Url` sau vòng poll để e3 không GET about:blank; (3) e1 log HTTP status khi resp không Ok. Build/test lại xanh sau sửa. Mục smoke với đơn thật: CHỜ NGƯỜI DÙNG chạy app xử lý 1 đơn, kỳ vọng `D:\Phieu-giao-hang\<mã đơn>.png` thấy nội dung phiếu; nếu vẫn trắng, lấy dòng log "Tab phiếu DOM: ..." để tinh chỉnh vòng sau.

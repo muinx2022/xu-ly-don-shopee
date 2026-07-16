@@ -2,16 +2,16 @@ namespace XuLyDonShopee.Core.Services;
 
 /// <summary>
 /// Kết quả xử lý MỘT đơn: về "Tất cả" → Chuẩn bị hàng → tự mang ra bưu cục → Xác nhận → In phiếu giao
-/// (kèm tải/in phiếu best-effort). Phân biệt bước hỏng để app báo đúng.
+/// (kèm chụp/lưu phiếu best-effort). Phân biệt bước hỏng để app báo đúng.
 /// <para>
-/// Ghi chú: tải/in phiếu THẤT BẠI <b>KHÔNG</b> coi là fail cả đơn — đơn đã được arrange; chỉ log cảnh báo.
-/// <see cref="Ok"/> nghĩa là đã qua bước "In phiếu giao" (đã bắt được tab phiếu). Việc tải file + gửi lệnh
-/// in là best-effort có log.
+/// Ghi chú: chụp/lưu phiếu THẤT BẠI <b>KHÔNG</b> coi là fail cả đơn — đơn đã được arrange; chỉ log cảnh báo.
+/// <see cref="Ok"/> nghĩa là đã qua bước "In phiếu giao" (đã bắt được tab phiếu). Việc chụp/lưu phiếu là
+/// best-effort có log.
 /// </para>
 /// </summary>
 public enum ArrangeShipmentResult
 {
-    /// <summary>Đã xử lý xong 1 đơn (đã bấm In phiếu giao + bắt tab phiếu; tải/in là best-effort).</summary>
+    /// <summary>Đã xử lý xong 1 đơn (đã bấm In phiếu giao + bắt tab phiếu; chụp/lưu là best-effort).</summary>
     Ok,
     /// <summary>Không còn đơn nào trong danh sách chờ xử lý → dừng vòng (plan sau dùng để lặp).</summary>
     NoOrder,

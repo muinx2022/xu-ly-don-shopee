@@ -121,15 +121,15 @@ public interface ILoginSession : IAsyncDisposable
     /// về trang danh sách đơn (<c>/portal/sale/order</c>), lấy đơn đầu tiên → bấm <b>"Chuẩn bị hàng"</b> →
     /// trong modal <b>"Giao Đơn Hàng"</b> chọn <b>"Tôi sẽ tự mang hàng tới Bưu cục"</b> (mặc định đã chọn)
     /// → bấm <b>"Xác nhận"</b> → chờ modal <b>"Thông Tin Chi Tiết"</b> → bấm <b>"In phiếu giao"</b> → BẮT
-    /// tab phiếu mới, TẢI phiếu về <paramref name="downloadDir"/> + gửi lệnh in máy in mặc định (im lặng)
-    /// rồi ĐÓNG tab. <b>Toàn bộ click bằng thao tác kiểu người CÓ HIT-TEST</b> (di chuột cong, click
+    /// tab phiếu mới, CHỤP màn hình phiếu (PNG) + lưu PDF thật về <paramref name="downloadDir"/> (KHÔNG gửi
+    /// lệnh in — lưu để in sau) rồi ĐÓNG tab. <b>Toàn bộ click bằng thao tác kiểu người CÓ HIT-TEST</b> (di chuột cong, click
     /// down→trễ→up, có dừng "đọc trang" ngẫu nhiên; KHÔNG dùng ClickAsync/Fill/native). Mỗi bước gọi
     /// <paramref name="log"/> (nếu có) để theo dõi live.
     /// <para>
     /// <b>Graceful — không bao giờ ném:</b> mọi lỗi/hủy → trả một giá trị <see cref="ArrangeShipmentResult"/>
     /// (KHÔNG phá phiên). <see cref="ArrangeShipmentResult.NoOrder"/> khi danh sách rỗng;
     /// <see cref="ArrangeShipmentResult.Ok"/> khi đã qua bước "In phiếu giao" (bắt được tab phiếu). Việc
-    /// TẢI/IN phiếu là <b>best-effort có log</b> — thất bại chỉ cảnh báo, KHÔNG hạ kết quả xuống fail (đơn đã
+    /// chụp/lưu phiếu là <b>best-effort có log</b> — thất bại chỉ cảnh báo, KHÔNG hạ kết quả xuống fail (đơn đã
     /// được arrange). Chỉ làm MỘT đơn (chạy 1 lần).
     /// </para>
     /// </summary>
@@ -2188,6 +2188,7 @@ public class ShopeeLoginService
                 L("Chờ nút In phiếu giao bấm được (Shopee đang tạo vận đơn)...");
                 var before = _browser.Contexts.SelectMany(c => c.Pages).ToList();
                 IPage? newPage = null;
+                bool clickedPrint = false;
                 var printDeadline = DateTime.UtcNow.AddSeconds(40);
                 while (newPage is null && DateTime.UtcNow < printDeadline)
                 {
@@ -2211,6 +2212,7 @@ public class ShopeeLoginService
                     }
 
                     (mx, my) = await HumanMoveAndClickAsync(page, btn, mx, my, rng, ct).ConfigureAwait(false);
+                    clickedPrint = true;
                     L("Đã bấm In phiếu giao (kiểu người), chờ tab phiếu mở...");
 
                     // Chờ tab mới ~8s sau cú click này rồi mới thử lại (bấm lần nữa nếu vẫn chưa mở).
@@ -2228,7 +2230,9 @@ public class ShopeeLoginService
                 }
                 if (newPage is null)
                 {
-                    L("Đã bấm In phiếu giao nhưng KHÔNG thấy tab phiếu mở ra — kiểm tra tay.");
+                    L(clickedPrint
+                        ? "Đã bấm In phiếu giao nhưng KHÔNG thấy tab phiếu mở ra — kiểm tra tay."
+                        : "Nút In phiếu giao KHÔNG bấm được trong 40s (chưa bấm được lần nào) — kiểm tra tay.");
                     return ArrangeShipmentResult.PrintFailed;
                 }
 
@@ -2241,8 +2245,8 @@ public class ShopeeLoginService
                 }
                 L($"Đã bắt được tab phiếu ({(SafeUrlHasAwbprint(newPage) ? "awbprint OK" : "URL chưa phải awbprint")}).");
 
-                // Từ đây: TẢI/IN best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
-                await DownloadAndPrintSlipAsync(newPage, downloadDir, orderCode, L, ct).ConfigureAwait(false);
+                // Từ đây: CHỤP/LƯU best-effort có log — KHÔNG hạ kết quả xuống fail (đơn đã được arrange).
+                await SaveSlipAsync(newPage, downloadDir, orderCode, L, ct).ConfigureAwait(false);
 
                 // Đóng modal "Thông Tin Chi Tiết" bằng nút X (modal KHÔNG tự đóng sau khi in) rồi mới coi là
                 // xong đơn — best-effort, có log; KHÔNG hạ Ok nếu không đóng được (đơn đã arrange/in).
@@ -2256,9 +2260,10 @@ public class ShopeeLoginService
                 // KHÔNG báo "Xử lý đơn gặp lỗi" (Failed) gây hiểu lầm.
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
                 // Bất kỳ lỗi bất ngờ nào (selector đổi, context ngắt...) → Failed, KHÔNG phá phiên.
+                L("Xử lý đơn gặp lỗi bất ngờ: " + ex.Message);
                 return ArrangeShipmentResult.Failed;
             }
         }
@@ -2268,21 +2273,43 @@ public class ShopeeLoginService
         private static bool LooksPdf(byte[]? b)
             => b is { Length: > 4 } && b[0] == 0x25 && b[1] == 0x50 && b[2] == 0x44 && b[3] == 0x46;
 
+        /// <summary>Ngưỡng bytes tối thiểu để coi một PDF render (<c>printToPDF</c>) là "có nội dung thật":
+        /// nhỏ hơn ngưỡng này gần như chắc là bản TRẮNG (phiếu nằm trong khung nhúng mà <c>printToPDF</c> của
+        /// trang bọc không vẽ được) → KHÔNG tính là đã có PDF thật, dùng ảnh PNG thay thế.</summary>
+        private const int MinRealSlipPdfBytes = 3000;
+
+        /// <summary>Kích thước file (bytes) — nuốt lỗi (file chưa có/không đọc được) trả 0. Chỉ để log.</summary>
+        private static long SafeFileLength(string path)
+        {
+            try { return new FileInfo(path).Length; } catch { return 0; }
+        }
+
         /// <summary>
-        /// Trên TAB PHIẾU (trang HTML "Xem trước bản in"): TẢI phiếu về <paramref name="downloadDir"/> → gửi
-        /// lệnh IN → ĐÓNG tab — <b>best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được
-        /// arrange). Tải: (a) CHÍNH = CDP <c>Page.printToPDF</c> (render HTML nhãn thành PDF, có
-        /// <see cref="LooksPdf"/>-check); (b) fallback GET URL qua <c>APIRequest</c> (cũng %PDF/content-type
-        /// check). In: CLICK nút "In phiếu" trên tab (kiểu người verified; <c>--kiosk-printing</c> → in im
-        /// lặng máy in mặc định), fallback <c>window.print()</c> nếu không bấm được nút.
+        /// Trên TAB PHIẾU (trang HTML "Xem trước bản in"): CHỜ nội dung phiếu thật sự hiện → CHỤP màn hình cả
+        /// trang lưu <b>PNG</b> (artifact CHÍNH — chắc chắn đúng cái mắt thấy) → cố lấy <b>PDF thật</b> về
+        /// <paramref name="downloadDir"/> (artifact PHỤ) → ĐÓNG tab. <b>KHÔNG gửi lệnh in nào</b> (bỏ theo yêu
+        /// cầu — lưu phiếu để in sau). <b>Best-effort có log</b>: mọi lỗi chỉ cảnh báo, KHÔNG ném (đơn đã được
+        /// arrange). Mọi thao tác trên tab CHỈ ĐỌC DOM (đếm iframe/embed/object + ảnh, screenshot, printToPDF)
+        /// — KHÔNG click, KHÔNG vá/hook JS (quy tắc stealth). PDF thật thử lần lượt: (e1) GET src khung nhúng
+        /// đầu tiên (http[s]) qua <c>APIRequest</c> — %PDF/content-type check; (e2) CDP <c>Page.printToPDF</c>
+        /// (<see cref="LooksPdf"/>-check + ngưỡng <see cref="MinRealSlipPdfBytes"/> chống bản trắng); (e3) GET
+        /// page-URL fallback. Coi là "đã lưu phiếu" khi PNG chụp OK <b>hoặc</b> có PDF ≥ ngưỡng.
         /// </summary>
-        private async Task DownloadAndPrintSlipAsync(
+        private async Task SaveSlipAsync(
             IPage newPage, string downloadDir, string orderCode, Action<string> L, CancellationToken ct)
         {
-            try { await newPage.WaitForLoadStateAsync(LoadState.DOMContentLoaded,
-                new PageWaitForLoadStateOptions { Timeout = 8000 }).ConfigureAwait(false); }
+            var rng = new Random();
+
+            // Đọc int an toàn từ 1 property JSON (Number) — mọi giá trị lạ/thiếu → 0 (không ném).
+            static int ReadInt(JsonElement e, string prop)
+                => e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number
+                    ? (int)v.GetDouble() : 0;
+
+            // a. Chờ load (best-effort; nuốt timeout, OperationCanceledException vẫn ném để dừng sạch).
+            try { await newPage.WaitForLoadStateAsync(LoadState.Load,
+                new PageWaitForLoadStateOptions { Timeout = 10_000 }).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
-            catch { /* tab phiếu có thể vẫn đang tải — vẫn thử tải bên dưới */ }
+            catch { /* tab phiếu có thể vẫn đang tải — vẫn thử chụp/tải bên dưới */ }
 
             string url;
             try { url = newPage.Url; } catch { url = string.Empty; }
@@ -2292,66 +2319,221 @@ public class ShopeeLoginService
             var jobId = ShopeeShippingNav.ExtractJobId(url);
             var baseName = !string.IsNullOrEmpty(orderCode) ? orderCode
                          : (!string.IsNullOrEmpty(jobId) ? jobId : "phieu");
-            var fileName = ShopeeShippingNav.SanitizeFileName(baseName) + ".pdf";
+            var safeName = ShopeeShippingNav.SanitizeFileName(baseName);
 
-            string path;
+            string dir;
             try
             {
                 Directory.CreateDirectory(downloadDir);
-                path = Path.Combine(downloadDir, fileName);
+                dir = downloadDir;
             }
             catch (Exception ex)
             {
                 L("Cảnh báo: không tạo được thư mục lưu phiếu: " + ex.Message);
-                path = string.Empty;
+                dir = string.Empty;
             }
 
-            // ===== TẢI (best-effort) =====
-            // Tab awbprint là TRANG HTML "Xem trước bản in" (nhãn SPX) → GET URL chỉ trả HTML (bị %PDF-check
-            // loại). Đường TIN CẬY là RENDER PDF: ưu tiên CDP Page.printToPDF (render HTML nhãn thành PDF
-            // thật) làm chính; GET URL chỉ là fallback (vẫn %PDF/content-type check để không ghi rác).
-            bool downloaded = false;
-            if (path.Length > 0)
+            // b. Chờ nội dung phiếu (poll ≤ 25s, bước 500–800ms). Eval CHỈ ĐỌC DOM (không vá/hook — quy tắc
+            //    stealth): đếm iframe/embed/object + src NGUYÊN VẸN (để GET PDF thật ở e1), đếm ảnh đã complete
+            //    kích thước > 0. Trả JSON string (JSON.stringify) để C# tự parse — "Sẵn sàng" khi có ≥ 1 khung
+            //    nhúng HOẶC ≥ 1 ảnh. (Việc cắt ≤ 120 ký tự chỉ làm ở C# khi ghép DÒNG LOG chẩn đoán.)
+            const string probeJs = @"() => {
+                const val = s => s || '';
+                const frames = Array.from(document.querySelectorAll('iframe')).map(e => val(e.src));
+                const embeds = Array.from(document.querySelectorAll('embed')).map(e => val(e.src));
+                const objects = Array.from(document.querySelectorAll('object')).map(e => val(e.data));
+                let imgReady = 0;
+                for (const im of document.images) {
+                    if (im.complete && im.naturalWidth > 0 && im.naturalHeight > 0) imgReady++;
+                }
+                return JSON.stringify({
+                    iframe: frames.length, embed: embeds.length, object: objects.length,
+                    srcs: frames.concat(embeds).concat(objects).filter(s => s), imgReady: imgReady
+                });
+            }";
+
+            int iframeCount = 0, embedCount = 0, objectCount = 0, imgReady = 0;
+            var embedSrcs = new List<string>();
+            var contentDeadline = DateTime.UtcNow.AddSeconds(25);
+            bool contentReady = false;
+            while (DateTime.UtcNow < contentDeadline)
             {
-                // (a) CDP Page.printToPDF (CHÍNH) — render trang phiếu (HTML) thành PDF, có %PDF-check.
+                ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var cdp = await _context.NewCDPSessionAsync(newPage).ConfigureAwait(false);
-                    var res = await cdp.SendAsync("Page.printToPDF", new Dictionary<string, object>
+                    var json = await newPage.EvaluateAsync<string>(probeJs).ConfigureAwait(false);
+                    using var doc = JsonDocument.Parse(json);
+                    var probe = doc.RootElement;
+                    iframeCount = ReadInt(probe, "iframe");
+                    embedCount = ReadInt(probe, "embed");
+                    objectCount = ReadInt(probe, "object");
+                    imgReady = ReadInt(probe, "imgReady");
+                    embedSrcs.Clear();
+                    if (probe.TryGetProperty("srcs", out var ps) && ps.ValueKind == JsonValueKind.Array)
                     {
-                        ["printBackground"] = true,
-                        ["preferCSSPageSize"] = true,
-                    }).ConfigureAwait(false);
-
-                    // SendAsync trả JsonElement? (null nếu lệnh không có payload) → lấy "data" (base64) an toàn.
-                    string? data = res is JsonElement je && je.TryGetProperty("data", out var d)
-                        ? d.GetString()
-                        : null;
-                    if (!string.IsNullOrEmpty(data))
+                        foreach (var s in ps.EnumerateArray())
+                        {
+                            var v = s.GetString();
+                            if (!string.IsNullOrEmpty(v)) embedSrcs.Add(v);
+                        }
+                    }
+                    if (iframeCount + embedCount + objectCount >= 1 || imgReady >= 1)
                     {
-                        var bytes = Convert.FromBase64String(data);
-                        if (LooksPdf(bytes))
-                        {
-                            await File.WriteAllBytesAsync(path, bytes, ct).ConfigureAwait(false);
-                            downloaded = true;
-                            L($"Đã tải phiếu (render PDF): {path} ({bytes.Length} bytes).");
-                        }
-                        else
-                        {
-                            L("Render PDF trả dữ liệu KHÔNG phải PDF — bỏ, thử GET URL.");
-                        }
+                        contentReady = true;
+                        break;
                     }
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
+                catch { /* trang chưa cho eval — thử vòng sau */ }
+
+                await Task.Delay(rng.Next(500, 800), ct).ConfigureAwait(false);
+            }
+
+            if (contentReady)
+            {
+                // Cho khung nhúng kịp vẽ trước khi chụp.
+                await Task.Delay(rng.Next(1500, 2500), ct).ConfigureAwait(false);
+            }
+            else
+            {
+                L("Không thấy dấu hiệu nội dung phiếu sau 25s — ảnh chụp có thể trắng.");
+            }
+
+            // c. Src http(s) ĐẦU TIÊN của khung nhúng (bản ĐẦY ĐỦ để GET PDF thật ở e1) + MỘT dòng chẩn đoán
+            //    DOM (dữ liệu tinh chỉnh vòng sau nếu smoke vẫn trắng). Src trong log cắt ≤ 120 ký tự cho gọn.
+            var firstHttpSrc = embedSrcs.FirstOrDefault(s =>
+                s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+            var logSrc = firstHttpSrc.Length > 0 ? firstHttpSrc : (embedSrcs.Count > 0 ? embedSrcs[0] : string.Empty);
+            if (logSrc.Length > 120) logSrc = logSrc.Substring(0, 120);
+            var srcInfo = logSrc.Length > 0 ? $" (src={logSrc})" : string.Empty;
+            L($"Tab phiếu DOM: {iframeCount} iframe{srcInfo}, {embedCount} embed, {objectCount} object, {imgReady} ảnh.");
+
+            // d. CHỤP MÀN HÌNH (artifact CHÍNH). FullPage lỗi (plugin/khung nhúng) → thử lại FullPage=false.
+            bool pngSaved = false;
+            if (dir.Length > 0)
+            {
+                var pngPath = Path.Combine(dir, safeName + ".png");
+                try
                 {
-                    L("Render PDF chưa được: " + ex.Message);
+                    await newPage.ScreenshotAsync(new PageScreenshotOptions { FullPage = true, Path = pngPath })
+                        .ConfigureAwait(false);
+                    pngSaved = true;
+                    L($"Đã chụp phiếu (PNG): {pngPath} ({SafeFileLength(pngPath)} bytes).");
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex1)
+                {
+                    L("Chụp PNG FullPage lỗi (" + ex1.Message + ") — thử lại FullPage=false.");
+                    try
+                    {
+                        await newPage.ScreenshotAsync(new PageScreenshotOptions { FullPage = false, Path = pngPath })
+                            .ConfigureAwait(false);
+                        pngSaved = true;
+                        L($"Đã chụp phiếu (PNG): {pngPath} ({SafeFileLength(pngPath)} bytes).");
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex2)
+                    {
+                        L("Cảnh báo: chụp PNG cả hai lần đều lỗi: " + ex2.Message);
+                    }
+                }
+            }
+
+            // Sau vòng chờ nội dung: tab có thể đã điều hướng từ about:blank sang awbprint → đọc lại URL để e3
+            // GET đúng trang phiếu (không GET "about:blank"). Đọc lỗi → giữ url cũ.
+            try { var u2 = newPage.Url; if (!string.IsNullOrEmpty(u2)) url = u2; } catch { /* giữ url cũ */ }
+
+            // e. Lấy PDF thật (artifact PHỤ, best-effort) — thử lần lượt tới khi được.
+            bool pdfReal = false;
+            if (dir.Length > 0)
+            {
+                var pdfPath = Path.Combine(dir, safeName + ".pdf");
+
+                // e1. GET src khung nhúng http(s) ĐẦU TIÊN qua context đã đăng nhập. Token phiếu dùng 1 lần →
+                //     GET đúng MỘT lần; CHỈ ghi khi content-type "pdf" HOẶC magic %PDF (không lưu rác).
+                if (firstHttpSrc.Length > 0)
+                {
+                    try
+                    {
+                        var resp = await newPage.APIRequest.GetAsync(firstHttpSrc).ConfigureAwait(false);
+                        if (resp.Ok)
+                        {
+                            var body = await resp.BodyAsync().ConfigureAwait(false);
+                            var isPdf = body is { Length: > 0 }
+                                && ((resp.Headers.TryGetValue("content-type", out var ctype)
+                                        && ctype.Contains("pdf", StringComparison.OrdinalIgnoreCase))
+                                    || LooksPdf(body));
+                            if (isPdf)
+                            {
+                                await File.WriteAllBytesAsync(pdfPath, body!, ct).ConfigureAwait(false);
+                                pdfReal = true;
+                                L($"Đã tải phiếu PDF thật (src khung nhúng): {pdfPath} ({body!.Length} bytes).");
+                            }
+                            else
+                            {
+                                L("GET src khung nhúng KHÔNG phải PDF — bỏ, thử render PDF.");
+                            }
+                        }
+                        else
+                        {
+                            L($"GET src khung nhúng trả HTTP {resp.Status} — bỏ, thử render PDF.");
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        L("GET src khung nhúng chưa được: " + ex.Message);
+                    }
                 }
 
-                // (b) Fallback GET URL qua context đã đăng nhập. CHỈ nhận khi THỰC SỰ là PDF (content-type
-                //     "pdf" hoặc magic bytes %PDF) — token first_time=1 dùng 1 lần nên GET lần 2 dễ trả
-                //     HTML/redirect 200-OK: KHÔNG được ghi rác vào .pdf.
-                if (!downloaded && url.Length > 0)
+                // e2. CDP Page.printToPDF (render HTML → PDF), có %PDF-check + ngưỡng chống bản trắng.
+                if (!pdfReal)
+                {
+                    try
+                    {
+                        var cdp = await _context.NewCDPSessionAsync(newPage).ConfigureAwait(false);
+                        var res = await cdp.SendAsync("Page.printToPDF", new Dictionary<string, object>
+                        {
+                            ["printBackground"] = true,
+                            ["preferCSSPageSize"] = true,
+                        }).ConfigureAwait(false);
+
+                        // SendAsync trả JsonElement? (null nếu lệnh không có payload) → lấy "data" (base64) an toàn.
+                        string? data = res is JsonElement je && je.TryGetProperty("data", out var d)
+                            ? d.GetString()
+                            : null;
+                        if (!string.IsNullOrEmpty(data))
+                        {
+                            var bytes = Convert.FromBase64String(data);
+                            if (LooksPdf(bytes))
+                            {
+                                await File.WriteAllBytesAsync(pdfPath, bytes, ct).ConfigureAwait(false);
+                                if (bytes.Length >= MinRealSlipPdfBytes)
+                                {
+                                    pdfReal = true;
+                                    L($"Đã tải phiếu (render PDF): {pdfPath} ({bytes.Length} bytes).");
+                                }
+                                else
+                                {
+                                    L($"PDF render nghi TRẮNG ({bytes.Length} bytes) — dùng file PNG thay thế.");
+                                }
+                            }
+                            else
+                            {
+                                L("Render PDF trả dữ liệu KHÔNG phải PDF — bỏ, thử GET URL.");
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        L("Render PDF chưa được: " + ex.Message);
+                    }
+                }
+
+                // e3. Fallback GET page-URL qua context đã đăng nhập (%PDF/content-type check).
+                if (!pdfReal && url.Length > 0)
                 {
                     try
                     {
@@ -2365,9 +2547,9 @@ public class ShopeeLoginService
                                     || LooksPdf(body));
                             if (isPdf)
                             {
-                                await File.WriteAllBytesAsync(path, body!, ct).ConfigureAwait(false);
-                                downloaded = true;
-                                L($"Đã tải phiếu (GET URL fallback): {path} ({body!.Length} bytes).");
+                                await File.WriteAllBytesAsync(pdfPath, body!, ct).ConfigureAwait(false);
+                                pdfReal = true;
+                                L($"Đã tải phiếu (GET URL fallback): {pdfPath} ({body!.Length} bytes).");
                             }
                             else
                             {
@@ -2383,51 +2565,13 @@ public class ShopeeLoginService
                 }
             }
 
-            if (!downloaded)
+            // f. Tổng kết: "đã lưu phiếu" khi PNG chụp OK HOẶC có PDF ≥ ngưỡng.
+            if (!pngSaved && !pdfReal)
             {
-                L("Cảnh báo: CHƯA tải được phiếu (cả render PDF lẫn GET URL) — đơn vẫn đã được arrange.");
+                L("Cảnh báo: CHƯA lưu được phiếu có nội dung — kiểm tra tay trong Brave.");
             }
 
-            // ===== IN (best-effort): CLICK nút "In phiếu" RIÊNG trên tab phiếu (kiểu người, verified). Tab
-            //   phiếu là trang HTML có nút "In phiếu" (data-testid='print-button', text "In phiếu") kích hoạt
-            //   lệnh in; với --kiosk-printing → in im lặng máy in mặc định. Chờ nút bấm được rồi click qua
-            //   TryHumanClickVisibleAsync (mx/my riêng theo viewport tab phiếu). Không tìm/không bấm được →
-            //   fallback window.print(). =====
-            try
-            {
-                var printBtn = await WaitPrintButtonClickableAsync(
-                    newPage, ShopeeShippingNav.IsPrintButtonText, 15000, ct).ConfigureAwait(false);
-                if (printBtn is not null)
-                {
-                    var rng2 = new Random();
-                    var vp2 = newPage.ViewportSize;
-                    double m2x = (vp2 is not null ? vp2.Width : 1280) * rng2.NextDouble();
-                    double m2y = (vp2 is not null ? vp2.Height : 720) * rng2.NextDouble();
-                    bool printed;
-                    (m2x, m2y, printed) = await TryHumanClickVisibleAsync(newPage, printBtn, m2x, m2y, rng2, ct).ConfigureAwait(false);
-                    if (printed)
-                    {
-                        L("Đã bấm In phiếu (in máy in mặc định).");
-                    }
-                    else
-                    {
-                        await FirePrintFallbackAsync(newPage, ct).ConfigureAwait(false);
-                        L("Bấm In phiếu chưa ăn — dùng window.print() (in im lặng).");
-                    }
-                }
-                else
-                {
-                    await FirePrintFallbackAsync(newPage, ct).ConfigureAwait(false);
-                    L("Không thấy nút In phiếu — dùng window.print() (in im lặng).");
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                L("Gửi lệnh in chưa được: " + ex.Message);
-            }
-
-            // ===== ĐÓNG tab phiếu =====
+            // ===== ĐÓNG tab phiếu (KHÔNG gửi lệnh in nào) =====
             try
             {
                 await newPage.CloseAsync().ConfigureAwait(false);
@@ -2437,14 +2581,6 @@ public class ShopeeLoginService
             {
                 L("Đóng tab phiếu chưa được: " + ex.Message);
             }
-        }
-
-        /// <summary>Gọi <c>window.print()</c> trên <paramref name="page"/> bọc timeout ~5s chống treo (với
-        /// <c>--kiosk-printing</c> → in im lặng máy in mặc định). Fallback khi không click được nút "In phiếu".</summary>
-        private static async Task FirePrintFallbackAsync(IPage page, CancellationToken ct)
-        {
-            var printTask = page.EvaluateAsync("() => window.print()");
-            await Task.WhenAny(printTask, Task.Delay(5000, ct)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -2810,9 +2946,8 @@ public class ShopeeLoginService
         /// <paramref name="timeoutMs"/>: RE-FIND nút TƯƠI mỗi vòng (query PAGE-level, không giữ handle stale),
         /// tìm được candidate có box → tính tâm (cx,cy) rồi HIT-TEST bằng <see cref="IsPointOnElementAsync"/>;
         /// CHỈ trả khi hit-test PASS (lớp che đã tan). Ưu tiên <c>button[data-testid='print-button']</c>,
-        /// fallback button khớp <paramref name="textMatch"/> có bounding box. Dùng cho CẢ nút "In phiếu giao"
-        /// trong modal (<see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>) LẪN nút "In phiếu" trên tab
-        /// phiếu (<see cref="ShopeeShippingNav.IsPrintButtonText"/>). Không đạt → <c>null</c>.
+        /// fallback button khớp <paramref name="textMatch"/> có bounding box. Giờ CHỈ dùng cho nút "In phiếu
+        /// giao" trong modal (<see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>). Không đạt → <c>null</c>.
         /// </summary>
         private static async Task<IElementHandle?> WaitPrintButtonClickableAsync(
             IPage page, Func<string?, bool> textMatch, int timeoutMs, CancellationToken ct)
