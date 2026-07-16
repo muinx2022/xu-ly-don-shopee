@@ -320,3 +320,13 @@ Fable nghiệm thu (build 0/0 + 382/382) rồi panel phản biện tìm 3 điể
 **Kiểm chứng sau sửa:** `dotnet build XuLyDonShopee.sln -c Debug` → **0 Warning, 0 Error**;
 `dotnet test --no-build` → **382 pass, 0 fail** (không bị WDAC chặn → không cần `-p:Deterministic=false`).
 Chỉ đụng đúng `ShopeeLoginService.cs`; không commit (chờ Fable nghiệm thu lại).
+
+- **Sửa sau smoke thật (nút In phiếu giao hiện muộn):** người dùng smoke phát hiện SAU khi bấm "Xác nhận",
+  modal "Thông Tin Chi Tiết" đổi trạng thái (Shopee tạo vận đơn) và nút `button[data-testid='print-button']`
+  chỉ HIỆN MUỘN → code cũ tìm nút single-shot ngay sau delay cố định nên trả `PrintFailed`. Đã thay lời gọi
+  `FindPrintButtonAsync(detailModal)` (single-shot, đã XÓA vì thành dead-code) bằng helper mới
+  `WaitPrintButtonAsync(page, 30000, ct)` — POLL page-level 400ms/vòng tới 30s (ưu tiên
+  `button[data-testid='print-button']` có bounding box, fallback duyệt button khớp `IsPrintSlipButtonText`
+  có bounding box), kèm 2 dòng log ("Chờ nút In phiếu giao xuất hiện..." / "Nút In phiếu giao đã sẵn sàng").
+  Phần bắt tab (`RunAndWaitForPageAsync`) + `DownloadAndPrintSlipAsync` GIỮ NGUYÊN. Build **0/0**, test
+  **382 pass, 0 fail**. Chỉ đụng `ShopeeLoginService.cs`; không commit.

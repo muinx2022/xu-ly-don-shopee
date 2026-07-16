@@ -2184,11 +2184,16 @@ public class ShopeeLoginService
                 await Task.Delay(rng.Next(800, 2500), ct).ConfigureAwait(false); // "đọc modal"
 
                 // 6) Bấm "In phiếu giao" + BẮT tab mới + tải + in + đóng.
-                var printBtn = await FindPrintButtonAsync(detailModal).ConfigureAwait(false);
+                // SAU khi Xác nhận, modal "Thông Tin Chi Tiết" đổi trạng thái (Shopee tạo vận đơn) → nút "In
+                // phiếu giao" chỉ HIỆN MUỘN sau một lúc. Phải POLL tới khi nút thật sự hiện & hiển thị được
+                // (query PAGE-level vì modal có thể re-render làm handle detailModal stale), timeout 30s.
+                L("Chờ nút In phiếu giao xuất hiện (Shopee đang tạo vận đơn)...");
+                var printBtn = await WaitPrintButtonAsync(page, 30000, ct).ConfigureAwait(false);
                 if (printBtn is null)
                 {
                     return ArrangeShipmentResult.PrintFailed;
                 }
+                L("Nút In phiếu giao đã sẵn sàng, chuẩn bị bấm.");
 
                 // Bắt tab MỚI (bắt cả window.open) — click nút In phiếu giao NGAY trong action để bắt token 1 lần.
                 IPage? newPage = null;
@@ -2640,22 +2645,42 @@ public class ShopeeLoginService
         }
 
         /// <summary>
-        /// Dò nút "In phiếu giao" trong modal "Thông Tin Chi Tiết": (a) <c>button[data-testid='print-button']</c>;
-        /// (b) fallback button khớp <see cref="ShopeeShippingNav.IsPrintSlipButtonText"/>. Không thấy → <c>null</c>.
+        /// Chờ nút "In phiếu giao" xuất hiện &amp; HIỂN THỊ (Shopee tạo vận đơn xong nút mới hiện muộn), poll
+        /// tới hết <paramref name="timeoutMs"/>. Query PAGE-level (KHÔNG giữ handle modal có thể stale khi
+        /// modal re-render lúc tạo vận đơn). Ưu tiên <c>button[data-testid='print-button']</c> có bounding
+        /// box; fallback duyệt mọi <c>button</c> khớp <see cref="ShopeeShippingNav.IsPrintSlipButtonText"/> có
+        /// bounding box. Không thấy → <c>null</c>.
         /// </summary>
-        private static async Task<IElementHandle?> FindPrintButtonAsync(IElementHandle modal)
+        private static async Task<IElementHandle?> WaitPrintButtonAsync(IPage page, int timeoutMs, CancellationToken ct)
         {
-            try
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            do
             {
-                var btn = await modal.QuerySelectorAsync("button[data-testid='print-button']").ConfigureAwait(false);
-                if (btn is not null)
+                ct.ThrowIfCancellationRequested();
+
+                var el = await FirstVisibleByBoxAsync(page, "button[data-testid='print-button']", ct).ConfigureAwait(false);
+                if (el is not null)
                 {
-                    return btn;
+                    return el;
                 }
 
-                return await FindButtonByTextAsync(modal, ShopeeShippingNav.IsPrintSlipButtonText).ConfigureAwait(false);
+                try
+                {
+                    var buttons = await page.QuerySelectorAllAsync("button").ConfigureAwait(false);
+                    foreach (var b in buttons)
+                    {
+                        if (ShopeeShippingNav.IsPrintSlipButtonText(await b.InnerTextAsync().ConfigureAwait(false))
+                            && await b.BoundingBoxAsync().ConfigureAwait(false) is not null)
+                        {
+                            return b;
+                        }
+                    }
+                }
+                catch { /* chưa render — thử vòng sau */ }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
             }
-            catch { /* bỏ qua */ }
+            while (DateTime.UtcNow < deadline);
 
             return null;
         }
