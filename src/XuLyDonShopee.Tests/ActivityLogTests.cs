@@ -71,4 +71,58 @@ public class ActivityLogTests
         var files = Directory.GetFiles(dir.Path, "hoatdong-*.log");
         Assert.Single(files);
     }
+
+    [Fact]
+    public void Clear_TheoNguon_ChiXoaDongCuaNguonDo()
+    {
+        using var dir = new TempDir();
+        var log = new ActivityLog(dir.Path, uiPost: a => a());
+
+        log.Append("a", "a1");
+        log.Append("b", "b1");
+        log.Append("a", "a2");
+        log.Append("b", "b2");
+
+        log.Clear("a");
+
+        // Chỉ còn các dòng nguồn "b", đúng thứ tự; các dòng nguồn "a" bị xóa hết.
+        Assert.Equal(2, log.Entries.Count);
+        Assert.All(log.Entries, e => Assert.Equal("b", e.Source));
+        Assert.Equal(new[] { "b1", "b2" }, log.Entries.Select(e => e.Message).ToArray());
+    }
+
+    [Fact]
+    public void Clear_KhongThamSo_XoaHet()
+    {
+        using var dir = new TempDir();
+        var log = new ActivityLog(dir.Path, uiPost: a => a());
+
+        log.Append("a", "a1");
+        log.Append("b", "b1");
+
+        log.Clear();
+
+        Assert.Empty(log.Entries);
+    }
+
+    [Fact]
+    public void Clear_TheoNguon_SauKhiVuotCap_ChiXoaNguonDo()
+    {
+        using var dir = new TempDir();
+        var log = new ActivityLog(dir.Path, uiPost: a => a(), maxEntries: 3);
+
+        // Xen kẽ 2 nguồn, vượt cap 3 → ring-buffer chỉ giữ 3 dòng mới nhất (a1, b1, a2).
+        log.Append("a", "a0");
+        log.Append("b", "b0");
+        log.Append("a", "a1");
+        log.Append("b", "b1"); // vượt cap → bỏ a0
+        log.Append("a", "a2"); // vượt cap → bỏ b0
+        Assert.Equal(new[] { "a1", "b1", "a2" }, log.Entries.Select(e => e.Message).ToArray());
+
+        // Clear theo nguồn sau khi đã cắt cap: chỉ còn dòng nguồn "b".
+        log.Clear("a");
+        Assert.Single(log.Entries);
+        Assert.Equal("b", log.Entries[0].Source);
+        Assert.Equal("b1", log.Entries[0].Message);
+    }
 }

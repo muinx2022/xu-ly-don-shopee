@@ -18,8 +18,9 @@ public partial class AccountsView : UserControl
     }
 
     /// <summary>
-    /// Khi DataContext (AccountsViewModel) gắn/đổi: đăng ký lắng nghe <c>LogEntries</c> để mỗi khi có dòng
-    /// log mới thì tự cuộn panel xuống dòng cuối. Gỡ đăng ký cũ trước để không rò rỉ. Nuốt lỗi an toàn.
+    /// Khi DataContext (AccountsViewModel) gắn/đổi: đăng ký lắng nghe <c>FilteredLogEntries</c> (collection
+    /// ĐANG HIỂN THỊ của panel — đã lọc theo tài khoản) để mỗi khi có dòng mới thì tự cuộn xuống dòng cuối.
+    /// Gỡ đăng ký cũ trước để không rò rỉ. Nuốt lỗi an toàn.
     /// </summary>
     private void OnDataContextChanged(object? sender, System.EventArgs e)
     {
@@ -29,7 +30,7 @@ public partial class AccountsView : UserControl
             _watchedLog = null;
         }
 
-        if (DataContext is AccountsViewModel vm && vm.LogEntries is INotifyCollectionChanged incc)
+        if (DataContext is AccountsViewModel vm && vm.FilteredLogEntries is INotifyCollectionChanged incc)
         {
             _watchedLog = incc;
             incc.CollectionChanged += OnLogEntriesChanged;
@@ -38,8 +39,8 @@ public partial class AccountsView : UserControl
 
     /// <summary>
     /// Có dòng log mới (Add) → cuộn ListBox xuống dòng cuối để luôn thấy hoạt động mới nhất. Marshal về UI
-    /// thread cho chắc (LogEntries chỉ mutate trên UI thread nhưng vẫn phòng hờ). Nuốt mọi lỗi (panel có
-    /// thể chưa gắn xong).
+    /// thread cho chắc (FilteredLogEntries chỉ mutate trên UI thread nhưng vẫn phòng hờ). Nuốt mọi lỗi (panel
+    /// có thể chưa gắn xong).
     /// </summary>
     private void OnLogEntriesChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

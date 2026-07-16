@@ -91,4 +91,20 @@ public sealed class ActivityLog
 
     /// <summary>Xóa các dòng đang hiển thị (qua <c>uiPost</c>). KHÔNG xóa file log trên đĩa.</summary>
     public void Clear() => _uiPost(() => Entries.Clear());
+
+    /// <summary>
+    /// Xóa các dòng đang hiển thị của RIÊNG một <paramref name="source"/> (qua <c>uiPost</c>) — dùng khi người
+    /// dùng chỉ muốn dọn log của tài khoản đang chọn. Duyệt NGƯỢC chỉ số để remove an toàn. KHÔNG xóa file log
+    /// trên đĩa (giống <see cref="Clear()"/>).
+    /// </summary>
+    public void Clear(string source) => _uiPost(() =>
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            if (Entries[i].Source == source)
+            {
+                Entries.RemoveAt(i);
+            }
+        }
+    });
 }

@@ -1,7 +1,7 @@
 # Plan: Log theo TỪNG tài khoản nằm trong cột chi tiết, bỏ khoảng trống phải, hàng nút form dùng icon
 
 - **Ngày:** 2026-07-16
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (chờ người dùng xem bằng mắt)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
@@ -85,4 +85,6 @@ Hiện trạng (đã khảo sát):
 
 ## Báo cáo thực thi (Opus điền sau khi xong)
 
-<Opus dán báo cáo cuối vào đây hoặc Fable tổng hợp lại sau nghiệm thu.>
+Opus làm đủ A/B/C/D (5 file + code-behind): FilteredLogEntries lọc theo SelectedRow.Email (Add append khớp / Remove gỡ per-item / còn lại rebuild — nhánh Remove per-item bổ sung sau khi panel nghiệm thu chốt 2 lỗi hiệu năng: cap-500 và Clear(source) gây rebuild toàn bộ mỗi event); ActivityLog.Clear(source) + 3 test mới (gồm test cap); panel log chuyển vào cột chi tiết (RowDefinitions "*,220"), tiêu đề động "Nhật ký — {Email}", auto-scroll code-behind đổi theo FilteredLogEntries; form MaxWidth=920 stretch (hết trống phải); 6 nút form icon ✓ ↶ ⟳ ■ ► ↗ (text-only, giữ Command/tooltip). Khác plan đã duyệt: sửa thêm AccountsView.axaml.cs (bắt buộc cho auto-scroll đúng collection); ✓ U+2713 thay ✔; rebuild trước guard _isRefreshing; giữ property LogEntries.
+
+Nghiệm thu (Fable): tự build 0 warning + 403/403 test; panel đối kháng 2/3 phiếu chốt 2 lỗi hiệu năng (đã sửa + kiểm lại), bác 2 phát hiện khác. Smoke thị giác/hành vi: CHỜ NGƯỜI DÙNG (đổi shop → log đổi theo; glyph ↶ ⟳ ↗ hiển thị dạng ký tự; không còn trống phải). Ghi chú theo dõi: nếu người dùng thấy THIẾU vài dòng ĐẦU PHIÊN trong panel lọc (dòng ghi trước khi phiên gắn nhãn email), báo lại để mở rộng bộ lọc.

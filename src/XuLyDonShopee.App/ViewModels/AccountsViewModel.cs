@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -35,6 +36,11 @@ public partial class AccountsViewModel : ViewModelBase
         _services.Sessions.Changed += OnSessionsChanged;
         _services.Sessions.CookieSaved += OnSessionCookieSaved;
 
+        // Panel log hiển thị theo TỪNG tài khoản: nghe collection log CHUNG rồi lọc theo Source == Email của
+        // tài khoản đang chọn. Sự kiện LUÔN nổ trên UI thread (ActivityLog.Append mutate Entries qua uiPost =
+        // Dispatcher.UIThread.Post) → handler ĐỒNG BỘ, KHÔNG lock/await (rebuild là vòng for thuần).
+        _services.Log.Entries.CollectionChanged += OnLogEntriesChanged;
+
         Reload();
     }
 
@@ -42,15 +48,34 @@ public partial class AccountsViewModel : ViewModelBase
     /// bọc <see cref="Account"/> + tick chọn + trạng thái phiên (chấm chạy / "Chờ lấy: N").</summary>
     public ObservableCollection<AccountRowViewModel> Accounts { get; } = new();
 
-    /// <summary>Các dòng nhật ký hoạt động (global mọi phiên) cho panel "Nhật ký hoạt động" ở cột phải.</summary>
+    /// <summary>Toàn bộ dòng nhật ký của MỌI phiên (collection CHUNG do <see cref="ActivityLog"/> giữ). Panel
+    /// log KHÔNG bind trực tiếp vào đây nữa mà bind <see cref="FilteredLogEntries"/> (đã lọc theo tài khoản).</summary>
     public ObservableCollection<LogEntry> LogEntries => _services.Log.Entries;
+
+    /// <summary>Các dòng nhật ký của RIÊNG tài khoản đang chọn (lọc <c>Source == SelectedRow.Email</c>) — nguồn
+    /// hiển thị của panel log ở cột chi tiết. Rỗng khi chưa chọn tài khoản. Cập nhật ĐỒNG BỘ trên UI thread qua
+    /// <see cref="OnLogEntriesChanged"/> (append dòng mới khớp) và <see cref="RebuildFilteredLog"/> (dựng lại).</summary>
+    public ObservableCollection<LogEntry> FilteredLogEntries { get; } = new();
 
     /// <summary>Đường dẫn file log hôm nay (hiển thị mờ dưới panel để biết file log ở đâu).</summary>
     public string LogPath => _services.Log.CurrentLogPath;
 
-    /// <summary>Xóa nội dung panel nhật ký (KHÔNG xóa file log trên đĩa).</summary>
+    /// <summary>Xóa các dòng đang hiển thị của TÀI KHOẢN đang chọn (KHÔNG xóa file log trên đĩa); chưa chọn
+    /// tài khoản → xóa toàn bộ hiển thị. Filtered tự cập nhật qua sự kiện CollectionChanged.</summary>
     [RelayCommand]
-    private void ClearLog() => _services.Log.Clear();
+    private void ClearLog()
+    {
+        // Chụp Email đồng bộ (không await) — theo bài học không giữ tham chiếu SelectedRow qua await.
+        var email = SelectedRow?.Email;
+        if (email is not null)
+        {
+            _services.Log.Clear(email);
+        }
+        else
+        {
+            _services.Log.Clear();
+        }
+    }
 
     /// <summary>Các lựa chọn trạng thái cho ComboBox.</summary>
     public static AccountStatus[] StatusOptions { get; } =
@@ -203,6 +228,11 @@ public partial class AccountsViewModel : ViewModelBase
 
     partial void OnSelectedRowChanged(AccountRowViewModel? value)
     {
+        // Đổi tài khoản đang chọn → dựng lại panel log theo tài khoản mới. Làm TRƯỚC guard _isRefreshing để
+        // log luôn khớp SelectedRow ở mọi đường (kể cả khi RefreshList set lại lựa chọn dưới cờ refresh);
+        // rebuild chỉ đụng FilteredLogEntries, đồng bộ trên UI thread, không reentrancy.
+        RebuildFilteredLog();
+
         if (_isRefreshing)
         {
             return;
@@ -240,6 +270,73 @@ public partial class AccountsViewModel : ViewModelBase
         if (session is not null)
         {
             WindowFocus.BringToFront(session.BraveProcess);
+        }
+    }
+
+    /// <summary>
+    /// Collection log CHUNG (<c>_services.Log.Entries</c>) vừa đổi — cập nhật <see cref="FilteredLogEntries"/>
+    /// theo tài khoản đang chọn. LUÔN chạy trên UI thread (ActivityLog mutate Entries qua uiPost) → thao tác
+    /// ĐỒNG BỘ, KHÔNG await/lock. Xử lý PER-ITEM để tránh rebuild lặp khi chạy lâu: Add → append dòng khớp
+    /// nguồn; Remove (cắt ring-buffer cap 500 / <see cref="ActivityLog.Clear(string)"/>) → gỡ đúng dòng đó khỏi
+    /// filtered (O(1) mỗi dòng, không rebuild); chỉ Reset/Replace/Move hoặc chưa chọn tài khoản → dựng lại toàn bộ.
+    /// </summary>
+    private void OnLogEntriesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        // Chụp Email đang chọn MỘT LẦN (đồng bộ, không await) — không giữ tham chiếu SelectedRow.
+        var email = SelectedRow?.Email;
+
+        if (e.Action == NotifyCollectionChangedAction.Add && email is not null && e.NewItems is not null)
+        {
+            foreach (var item in e.NewItems)
+            {
+                if (item is LogEntry entry && entry.Source == email)
+                {
+                    FilteredLogEntries.Add(entry);
+                }
+            }
+
+            return;
+        }
+
+        if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        {
+            // Cap ring-buffer / Clear(source) remove từng entry: chỉ gỡ đúng các entry đó khỏi filtered
+            // (Remove so theo value-equality của record LogEntry — 2 dòng value-trùng thì gỡ bản tương đương,
+            // hiển thị không đổi). email null → foreach không khớp → filtered vốn rỗng.
+            foreach (var item in e.OldItems)
+            {
+                if (item is LogEntry entry && entry.Source == email)
+                {
+                    FilteredLogEntries.Remove(entry);
+                }
+            }
+
+            return;
+        }
+
+        RebuildFilteredLog();
+    }
+
+    /// <summary>
+    /// Dựng lại <see cref="FilteredLogEntries"/> từ log CHUNG theo tài khoản đang chọn (<c>Source == Email</c>).
+    /// Chụp Email MỘT LẦN vào biến cục bộ; toàn bộ ĐỒNG BỘ trên UI thread (không await xen giữa — bài học
+    /// <c>viewmodel-mutable-field-after-await</c>). Chưa chọn tài khoản → panel rỗng.
+    /// </summary>
+    private void RebuildFilteredLog()
+    {
+        var email = SelectedRow?.Email;
+        FilteredLogEntries.Clear();
+        if (email is null)
+        {
+            return;
+        }
+
+        foreach (var entry in _services.Log.Entries)
+        {
+            if (entry.Source == email)
+            {
+                FilteredLogEntries.Add(entry);
+            }
         }
     }
 
