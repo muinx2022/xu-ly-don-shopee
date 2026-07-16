@@ -165,13 +165,30 @@ public interface ILoginSession : IAsyncDisposable
     /// tab bằng thao tác kiểu người CÓ HIT-TEST; phân trang code PHÒNG THỦ (nhiều selector nút "trang sau" +
     /// điều kiện danh sách phải ĐỔI sau khi bấm) + log chẩn đoán pager nếu không thấy nút.
     /// <para>
+    /// <b>Lấy thêm "Số tiền cuối cùng":</b> sau khi quét xong MỖI TRANG, với từng đơn KHÁC "Đã hủy" và CHƯA có
+    /// trong <paramref name="ordersWithFinalAmount"/>, MỞ trang chi tiết (ưu tiên click nút "Xem chi tiết" kiểu
+    /// người CÓ HIT-TEST → bắt TAB MỚI; fallback mở tab bằng <c>NewPageAsync</c>+<c>GotoAsync</c> URL chi tiết),
+    /// <c>EvaluateAsync</c> CHỈ-ĐỌC lấy <c>.amount</c> của card <c>[type='FinalAmount']</c>, parse qua
+    /// <see cref="ShopeeShippingNav.ParseVndAmount"/>, rồi ĐÓNG đúng tab vừa mở (KHÔNG đóng tab danh sách gốc).
+    /// Best-effort per-đơn: 1 đơn lỗi KHÔNG phá cả lượt sync. Bước này CHẬM (mỗi đơn = mở+đọc+đóng 1 tab).
+    /// </para>
+    /// <para>
     /// <b>Graceful — không bao giờ ném (trừ hủy):</b> mọi lỗi bất ngờ → trả về những đơn ĐÃ gom được (không
     /// mất dữ liệu đã quét) + log lỗi. Riêng <see cref="OperationCanceledException"/> ném XUYÊN để caller dừng
     /// sạch. Kết quả gồm danh sách đơn, số trang đã quét, và cờ có chạm chốt chặn số trang không.
     /// </para>
     /// </summary>
     /// <param name="log">Callback ghi log tiến trình từng trang (null → bỏ qua).</param>
-    Task<SyncOrdersResult> SyncAllOrdersAsync(Action<string>? log = null, CancellationToken ct = default);
+    /// <param name="ordersWithFinalAmount">
+    /// Tập <c>order_sn</c> ĐÃ có "Số tiền cuối cùng" trong DB (App cấp từ
+    /// <c>OrdersRepository.GetOrderSnsWithFinalAmount</c>). Đơn nằm trong tập này sẽ KHÔNG mở lại trang chi tiết
+    /// (tối ưu tốc độ — lần đầu lâu, các lần sau nhanh). Null → coi như CHƯA có đơn nào (mở chi tiết mọi đơn
+    /// khác "Đã hủy").
+    /// </param>
+    Task<SyncOrdersResult> SyncAllOrdersAsync(
+        Action<string>? log = null,
+        IReadOnlySet<string>? ordersWithFinalAmount = null,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -2518,13 +2535,18 @@ public class ShopeeLoginService
         // hoặc điều kiện dừng không kích hoạt). Chạm cap → dừng + cờ ReachedPageCap.
         private const int MaxSyncPages = 20;
 
-        public async Task<SyncOrdersResult> SyncAllOrdersAsync(Action<string>? log = null, CancellationToken ct = default)
+        public async Task<SyncOrdersResult> SyncAllOrdersAsync(
+            Action<string>? log = null,
+            IReadOnlySet<string>? ordersWithFinalAmount = null,
+            CancellationToken ct = default)
         {
             void L(string m) => log?.Invoke(m);
 
             // Gom dần + khử trùng lặp theo mã đơn (trang có thể trùng khi Shopee đổi dữ liệu giữa các lần quét).
             var collected = new List<SyncedOrder>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            // Tra object đơn (trong collected) theo mã — để gán "Số tiền cuối cùng" vào ĐÚNG object đã gom.
+            var bySn = new Dictionary<string, SyncedOrder>(StringComparer.Ordinal);
             var pages = 0;
             var reachedCap = false;
 
@@ -2599,9 +2621,29 @@ public class ShopeeLoginService
                         if (seen.Add(o.OrderSn))
                         {
                             collected.Add(o);
+                            bySn[o.OrderSn] = o;
                         }
                     }
                     L($"Sync trang {pages}: {pageOrders.Count} đơn.");
+
+                    // 2b) Lấy "Số tiền cuối cùng" cho các đơn của TRANG NÀY: đơn KHÁC "Đã hủy" VÀ chưa có
+                    //     final_amount (DB lần trước qua ordersWithFinalAmount, hoặc đã lấy ở trang trước trong
+                    //     lượt này qua FinalAmount != null). Mở CHI TIẾT trên tab MỚI → đọc → đóng. CHẬM (mỗi
+                    //     đơn 1 tab) nên chỉ làm cho đơn thật sự cần. Gán vào object trong collected qua bySn.
+                    var needFinal = pageOrders
+                        .Select(o => bySn.TryGetValue(o.OrderSn, out var c) ? c : null)
+                        .Where(c => c is not null
+                                    && !IsCancelledStatus(c!.Status)
+                                    && c.FinalAmount is null
+                                    && !(ordersWithFinalAmount?.Contains(c.OrderSn) ?? false))
+                        .Select(c => c!)
+                        .Distinct() // phòng card trùng mã trong cùng trang → không mở chi tiết 2 lần cùng đơn
+                        .ToList();
+                    if (needFinal.Count > 0)
+                    {
+                        (mx, my) = await FetchFinalAmountsForPageAsync(page, needFinal, pages, mx, my, rng, L, ct)
+                            .ConfigureAwait(false);
+                    }
 
                     // Ký hiệu danh sách hiện tại (số card + mã đơn đầu) — để phát hiện danh sách ĐỔI sau khi bấm.
                     var signatureBefore = await ReadListSignatureAsync(page, ct).ConfigureAwait(false);
@@ -2826,6 +2868,260 @@ public class ShopeeLoginService
         /// <summary>Rỗng/khoảng-trắng → null (để cột DB để NULL thay vì chuỗi rỗng).</summary>
         private static string? NullIfBlank(string? s)
             => string.IsNullOrWhiteSpace(s) ? null : s;
+
+        // ===== Lấy "Số tiền cuối cùng" từ TRANG CHI TIẾT đơn (cột "Ước tính" ở màn Đơn hàng) =====
+
+        // Prefix URL trang chi tiết đơn (/portal/sale/order/<id>) — dùng cho FALLBACK mở tab bằng
+        // NewPageAsync+Goto khi click "Xem chi tiết" không bắt được tab mới (bước CHỈ-ĐỌC nên chấp nhận kém human).
+        private const string OrderDetailUrlPrefix = "https://banhang.shopee.vn/portal/sale/order/";
+
+        // JS CHỈ-ĐỌC lấy text "Số tiền cuối cùng" trên trang chi tiết: ưu tiên card [type='FinalAmount'] > .amount;
+        // fallback tìm phần tử title KHỚP ĐÚNG "Số tiền cuối cùng" rồi lần lên tối đa 4 cấp cha tìm .amount (tránh
+        // vơ nhầm .amount đầu trang khi attribute type đổi). Không thấy → chuỗi rỗng.
+        private const string FinalAmountJs = @"() => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    const card = document.querySelector(""[type='FinalAmount']"");
+    if (card) {
+        const amt = card.querySelector('.amount');
+        if (amt) return norm(amt.textContent);
+    }
+    const nodes = document.querySelectorAll('div, span, p');
+    for (const t of nodes) {
+        if (norm(t.textContent) === 'Số tiền cuối cùng') {
+            let p = t.parentElement;
+            for (let up = 0; up < 4 && p; up++, p = p.parentElement) {
+                const amt = p.querySelector('.amount');
+                if (amt) return norm(amt.textContent);
+            }
+        }
+    }
+    return '';
+}";
+
+        /// <summary>True nếu trạng thái đơn là "Đã hủy" (chuẩn hóa khoảng trắng, KHÔNG phân biệt hoa/thường) —
+        /// KHỚP ĐÚNG (loại "Đã hủy một phần"). Đơn "Đã hủy" KHÔNG mở chi tiết lấy "Số tiền cuối cùng".</summary>
+        private static bool IsCancelledStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                return false;
+            }
+
+            var normalized = string.Join(' ', status.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return string.Equals(normalized, "Đã hủy", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Lấy "Số tiền cuối cùng" cho DANH SÁCH đơn cần-lấy của trang hiện tại: mỗi đơn → định vị card theo mã →
+        /// mở CHI TIẾT (ưu tiên click "Xem chi tiết" kiểu người CÓ HIT-TEST → BẮT tab mới; fallback
+        /// <c>NewPageAsync</c>+<c>Goto</c> URL chi tiết) → đọc <c>.amount</c> → parse → gán vào object đơn → ĐÓNG
+        /// đúng tab chi tiết vừa mở (KHÔNG đóng tab danh sách <paramref name="page"/>). Best-effort per-đơn (1 đơn
+        /// lỗi KHÔNG phá lượt); <see cref="OperationCanceledException"/> ném XUYÊN. Log tiến trình mỗi ~5 đơn. Trả
+        /// vị trí chuột mới (để giữ liền mạch chuỗi thao tác kiểu người của lượt sync).
+        /// </summary>
+        private async Task<(double X, double Y)> FetchFinalAmountsForPageAsync(
+            IPage page, IReadOnlyList<SyncedOrder> targets, int pageNo,
+            double mx, double my, Random rng, Action<string> L, CancellationToken ct)
+        {
+            var need = targets.Count;
+            var done = 0;
+            var got = 0;
+            L($"Lấy số tiền cuối cùng: 0/{need} đơn (trang {pageNo})...");
+
+            foreach (var order in targets)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var card = await FindOrderCardBySnAsync(page, order.OrderSn, ct).ConfigureAwait(false);
+                    var detailBtn = card is null
+                        ? null
+                        : await FindViewDetailButtonInCardAsync(card).ConfigureAwait(false);
+
+                    // Chụp tập tab TRƯỚC khi click để nhận ĐÚNG tab mới (không lẫn tab danh sách / tab khác).
+                    var before = _browser.Contexts.SelectMany(c => c.Pages).ToList();
+                    IPage? detailPage = null;
+
+                    // Cơ chế 1: click "Xem chi tiết" kiểu người (hit-test) → nút mở TAB MỚI → bắt tab (poll ≤8s).
+                    if (detailBtn is not null)
+                    {
+                        bool clicked;
+                        (mx, my, clicked) = await TryHumanClickVisibleAsync(page, detailBtn, mx, my, rng, ct).ConfigureAwait(false);
+                        if (clicked)
+                        {
+                            var tabDeadline = DateTime.UtcNow.AddSeconds(8);
+                            while (detailPage is null && DateTime.UtcNow < tabDeadline)
+                            {
+                                ct.ThrowIfCancellationRequested();
+                                try { detailPage = _browser.Contexts.SelectMany(c => c.Pages).FirstOrDefault(p => p != page && !before.Contains(p)); }
+                                catch { /* context ngắt — thử vòng sau */ }
+                                if (detailPage is null)
+                                {
+                                    await Task.Delay(300, ct).ConfigureAwait(false);
+                                }
+                            }
+                        }
+                    }
+
+                    // Cơ chế 2 (fallback): không bắt được tab từ click → mở tab CHỈ-ĐỌC bằng NewPageAsync + Goto.
+                    if (detailPage is null && !string.IsNullOrEmpty(order.ShopeeOrderId))
+                    {
+                        try
+                        {
+                            detailPage = await _context.NewPageAsync().ConfigureAwait(false);
+                            await detailPage.GotoAsync(OrderDetailUrlPrefix + order.ShopeeOrderId, new PageGotoOptions
+                            {
+                                WaitUntil = WaitUntilState.DOMContentLoaded,
+                                Timeout = 30000
+                            }).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch { /* nuốt lỗi điều hướng — vẫn thử đọc DOM bên dưới (poll tự lo) */ }
+                    }
+
+                    if (detailPage is null)
+                    {
+                        L($"Không mở được chi tiết đơn {order.OrderSn} — bỏ qua số tiền cuối cùng.");
+                    }
+                    else
+                    {
+                        try
+                        {
+                            var (amount, amountText) = await ReadFinalAmountAsync(detailPage, ct).ConfigureAwait(false);
+                            if (amount is not null || !string.IsNullOrEmpty(amountText))
+                            {
+                                order.FinalAmount = amount;
+                                order.FinalAmountText = amountText;
+                                got++;
+                            }
+                            else
+                            {
+                                L($"Chưa đọc được số tiền cuối cùng cho đơn {order.OrderSn}.");
+                            }
+                        }
+                        finally
+                        {
+                            // ĐÓNG đúng tab chi tiết vừa mở (click hoặc fallback) — tuyệt đối không đụng tab danh sách gốc.
+                            try { await detailPage.CloseAsync().ConfigureAwait(false); } catch { /* bỏ qua */ }
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    // 1 đơn lỗi (selector đổi, tab treo...) KHÔNG phá cả lượt sync.
+                    L($"Lỗi khi lấy số tiền cuối cùng đơn {order.OrderSn}: {ex.Message}");
+                }
+
+                done++;
+                if (done % 5 == 0 && done < need)
+                {
+                    L($"Lấy số tiền cuối cùng: {done}/{need} đơn (trang {pageNo})...");
+                }
+
+                // Dừng ngẫu nhiên kiểu người giữa các đơn.
+                await Task.Delay(rng.Next(400, 1200), ct).ConfigureAwait(false);
+            }
+
+            L($"Lấy số tiền cuối cùng xong trang {pageNo}: {got}/{need} đơn có số.");
+            return (mx, my);
+        }
+
+        /// <summary>Định vị card đơn (<c>a[data-testid='order-item']</c>) có token cuối của <c>.order-sn</c> ==
+        /// <paramref name="orderSn"/> trên trang danh sách. Không thấy → null. JS/DOM CHỈ ĐỌC.</summary>
+        private static async Task<IElementHandle?> FindOrderCardBySnAsync(IPage page, string orderSn, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var cards = await page.QuerySelectorAllAsync("a[data-testid='order-item']").ConfigureAwait(false);
+                foreach (var card in cards)
+                {
+                    var snEl = await card.QuerySelectorAsync(".order-sn").ConfigureAwait(false);
+                    if (snEl is null)
+                    {
+                        continue;
+                    }
+
+                    var raw = await snEl.InnerTextAsync().ConfigureAwait(false);
+                    var tokens = (raw ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    var sn = tokens.Length > 0 ? tokens[^1] : string.Empty;
+                    if (string.Equals(sn, orderSn, StringComparison.Ordinal))
+                    {
+                        return card;
+                    }
+                }
+            }
+            catch { /* selector chưa render / không hợp lệ */ }
+            return null;
+        }
+
+        /// <summary>Tìm nút "Xem chi tiết" trong card đơn: ưu tiên button có TEXT "Xem chi tiết" (tiêu chí chắc
+        /// nhất, không lẫn action khác), fallback <c>button[data-testid='action-button-1']</c>; chỉ nhận nút CÓ
+        /// bounding box (đang hiển thị). Không thấy → null.</summary>
+        private static async Task<IElementHandle?> FindViewDetailButtonInCardAsync(IElementHandle card)
+        {
+            try
+            {
+                var buttons = await card.QuerySelectorAllAsync("button").ConfigureAwait(false);
+                foreach (var b in buttons)
+                {
+                    var t = await b.InnerTextAsync().ConfigureAwait(false);
+                    if (IsViewDetailText(t) && await HasBoundingBoxAsync(b).ConfigureAwait(false))
+                    {
+                        return b;
+                    }
+                }
+
+                var byId = await card.QuerySelectorAsync("button[data-testid='action-button-1']").ConfigureAwait(false);
+                if (byId is not null && await HasBoundingBoxAsync(byId).ConfigureAwait(false))
+                {
+                    return byId;
+                }
+            }
+            catch { /* card DOM lạ — bỏ qua */ }
+            return null;
+        }
+
+        /// <summary>So khớp text nút với "Xem chi tiết" (chuẩn hóa khoảng trắng, KHÔNG phân biệt hoa/thường).</summary>
+        private static bool IsViewDetailText(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s))
+            {
+                return false;
+            }
+
+            var normalized = string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            return string.Equals(normalized, "Xem chi tiết", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Trên tab chi tiết: POLL ≤15s đọc "Số tiền cuối cùng" (JS CHỈ-ĐỌC <see cref="FinalAmountJs"/>);
+        /// có text → parse qua <see cref="ShopeeShippingNav.ParseVndAmount"/> + giữ nguyên văn. Hết giờ → (null,
+        /// null). <c>EvaluateAsync</c> ném (trang đang điều hướng) → nuốt, thử vòng sau; OCE ném xuyên.</summary>
+        private static async Task<(long? Amount, string? Text)> ReadFinalAmountAsync(IPage detailPage, CancellationToken ct)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            do
+            {
+                ct.ThrowIfCancellationRequested();
+
+                string text;
+                try { text = await detailPage.EvaluateAsync<string>(FinalAmountJs).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch { text = string.Empty; }
+
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    var raw = text.Trim();
+                    return (ShopeeShippingNav.ParseVndAmount(raw), raw);
+                }
+
+                await Task.Delay(400, ct).ConfigureAwait(false);
+            }
+            while (DateTime.UtcNow < deadline);
+
+            return (null, null);
+        }
 
         /// <summary>
         /// Chờ danh sách đơn render ỔN ĐỊNH: số card <c>a[data-testid='order-item']</c> &gt; 0 và ĐỨNG YÊN 2

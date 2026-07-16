@@ -59,11 +59,11 @@ public class OrdersRepository
                 ins.Transaction = tx;
                 ins.CommandText = @"INSERT INTO orders
     (account_id, order_sn, shopee_order_id, buyer_username, items_json, item_count, item_summary,
-     total_price, total_price_text, payment_method, status, status_description, cancel_reason,
+     total_price, total_price_text, final_amount, final_amount_text, payment_method, status, status_description, cancel_reason,
      channel, carrier, tracking_number, synced_at, created_at, updated_at)
     VALUES
     ($account, $sn, $shopeeId, $buyer, $items, $itemCount, $itemSummary,
-     $totalPrice, $totalText, $payment, $status, $statusDesc, $cancelReason,
+     $totalPrice, $totalText, $finalAmount, $finalText, $payment, $status, $statusDesc, $cancelReason,
      $channel, $carrier, $tracking, $synced, $synced, $synced);";
                 ins.Parameters.AddWithValue("$account", accountId);
                 ins.Parameters.AddWithValue("$sn", o.OrderSn);
@@ -76,9 +76,14 @@ public class OrdersRepository
             {
                 using var upd = conn.CreateCommand();
                 upd.Transaction = tx;
+                // final_amount/final_amount_text dùng COALESCE($moi, cot_cu): lần sync này KHÔNG lấy được (mở
+                // chi tiết bị bỏ qua / đơn "Đã hủy" / lỗi) thì $finalAmount là NULL → GIỮ số đã lấy ở lần trước,
+                // KHÔNG ghi đè NULL làm mất dữ liệu. Lần sau lấy được → cập nhật đè bình thường.
                 upd.CommandText = @"UPDATE orders SET
     shopee_order_id = $shopeeId, buyer_username = $buyer, items_json = $items, item_count = $itemCount,
     item_summary = $itemSummary, total_price = $totalPrice, total_price_text = $totalText,
+    final_amount = COALESCE($finalAmount, final_amount),
+    final_amount_text = COALESCE($finalText, final_amount_text),
     payment_method = $payment, status = $status, status_description = $statusDesc, cancel_reason = $cancelReason,
     channel = $channel, carrier = $carrier, tracking_number = $tracking,
     synced_at = $synced, updated_at = $synced
@@ -93,6 +98,30 @@ public class OrdersRepository
 
         tx.Commit();
         return (inserted, updated);
+    }
+
+    /// <summary>
+    /// Tập <c>order_sn</c> của một tài khoản ĐÃ CÓ <c>final_amount</c> (khác NULL). App truyền tập này vào
+    /// <c>SyncAllOrdersAsync</c> để BỎ QUA việc mở trang chi tiết lấy "Số tiền cuối cùng" cho đơn đã có —
+    /// tối ưu tốc độ (lần đầu lâu, các lần sau nhanh). So khớp mã đơn theo <see cref="StringComparer.Ordinal"/>.
+    /// </summary>
+    public HashSet<string> GetOrderSnsWithFinalAmount(long accountId)
+    {
+        using var conn = _db.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT order_sn FROM orders WHERE account_id = $account AND final_amount IS NOT NULL;";
+        cmd.Parameters.AddWithValue("$account", accountId);
+
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (!reader.IsDBNull(0))
+            {
+                set.Add(reader.GetString(0));
+            }
+        }
+        return set;
     }
 
     /// <summary>Số đơn đã lưu của một tài khoản (dùng cho màn xem — plan 2).</summary>
@@ -123,7 +152,7 @@ public class OrdersRepository
         using var cmd = conn.CreateCommand();
 
         var sql = new StringBuilder(@"SELECT id, account_id, order_sn, buyer_username, item_count, item_summary,
-    total_price, total_price_text, payment_method, status, status_description, cancel_reason,
+    total_price, total_price_text, final_amount, final_amount_text, payment_method, status, status_description, cancel_reason,
     channel, carrier, tracking_number, synced_at
     FROM orders WHERE 1 = 1");
 
@@ -205,14 +234,16 @@ public class OrdersRepository
         ItemSummary = r.IsDBNull(5) ? null : r.GetString(5),
         TotalPrice = r.IsDBNull(6) ? null : r.GetInt64(6),
         TotalPriceText = r.IsDBNull(7) ? null : r.GetString(7),
-        PaymentMethod = r.IsDBNull(8) ? null : r.GetString(8),
-        Status = r.IsDBNull(9) ? null : r.GetString(9),
-        StatusDescription = r.IsDBNull(10) ? null : r.GetString(10),
-        CancelReason = r.IsDBNull(11) ? null : r.GetString(11),
-        Channel = r.IsDBNull(12) ? null : r.GetString(12),
-        Carrier = r.IsDBNull(13) ? null : r.GetString(13),
-        TrackingNumber = r.IsDBNull(14) ? null : r.GetString(14),
-        SyncedAt = r.IsDBNull(15) ? default : DbSerialization.ParseDate(r.GetString(15)),
+        FinalAmount = r.IsDBNull(8) ? null : r.GetInt64(8),
+        FinalAmountText = r.IsDBNull(9) ? null : r.GetString(9),
+        PaymentMethod = r.IsDBNull(10) ? null : r.GetString(10),
+        Status = r.IsDBNull(11) ? null : r.GetString(11),
+        StatusDescription = r.IsDBNull(12) ? null : r.GetString(12),
+        CancelReason = r.IsDBNull(13) ? null : r.GetString(13),
+        Channel = r.IsDBNull(14) ? null : r.GetString(14),
+        Carrier = r.IsDBNull(15) ? null : r.GetString(15),
+        TrackingNumber = r.IsDBNull(16) ? null : r.GetString(16),
+        SyncedAt = r.IsDBNull(17) ? default : DbSerialization.ParseDate(r.GetString(17)),
     };
 
     /// <summary>Gắn các cột DỮ LIỆU (không gồm account_id/order_sn/khóa/thời gian) vào lệnh. Null → DBNull.</summary>
@@ -225,6 +256,8 @@ public class OrdersRepository
         cmd.Parameters.AddWithValue("$itemSummary", (object?)o.ItemSummary ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$totalPrice", (object?)o.TotalPrice ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$totalText", (object?)o.TotalPriceText ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$finalAmount", (object?)o.FinalAmount ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$finalText", (object?)o.FinalAmountText ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$payment", (object?)o.PaymentMethod ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$status", (object?)o.Status ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$statusDesc", (object?)o.StatusDescription ?? DBNull.Value);

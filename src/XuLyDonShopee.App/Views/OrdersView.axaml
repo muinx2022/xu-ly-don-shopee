@@ -105,6 +105,7 @@
                 <DataGridTextColumn Header="Người mua" Binding="{Binding Buyer}" Width="1.2*" />
                 <DataGridTextColumn Header="Sản phẩm" Binding="{Binding Product}" Width="2*" />
                 <DataGridTextColumn Header="Tổng tiền" Binding="{Binding Total}" Width="105" />
+                <DataGridTextColumn Header="Ước tính" Binding="{Binding Estimate}" Width="105" />
                 <DataGridTextColumn Header="Thanh toán" Binding="{Binding Payment}" Width="1.2*" />
                 <DataGridTextColumn Header="Trạng thái" Binding="{Binding Status}" Width="120" />
                 <DataGridTextColumn Header="Mô tả/Lý do hủy" Binding="{Binding Note}" Width="2*" />

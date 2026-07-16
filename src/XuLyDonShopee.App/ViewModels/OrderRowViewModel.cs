@@ -44,6 +44,10 @@ public sealed partial class OrderRowViewModel
     /// <summary>Tổng tiền: ưu tiên số đã parse (₫1.234.567), thiếu thì dùng nguyên văn.</summary>
     public string Total => BuildTotal(_row.TotalPrice, _row.TotalPriceText);
 
+    /// <summary>Cột "Ước tính" = "Số tiền cuối cùng" từ trang chi tiết: ưu tiên số đã parse (₫...), thiếu thì
+    /// nguyên văn, rỗng nếu chưa lấy (đơn "Đã hủy" hoặc chưa mở chi tiết).</summary>
+    public string Estimate => BuildTotal(_row.FinalAmount, _row.FinalAmountText);
+
     public string Payment => _row.PaymentMethod ?? string.Empty;
     public string Status => _row.Status ?? string.Empty;
 
@@ -60,9 +64,9 @@ public sealed partial class OrderRowViewModel
         ? string.Empty
         : _row.SyncedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture);
 
-    /// <summary>Chuyển sang dòng xuất CSV (đúng thứ tự cột như bảng).</summary>
+    /// <summary>Chuyển sang dòng xuất CSV (đúng thứ tự cột như bảng — "Ước tính" ngay sau "Tổng tiền").</summary>
     public OrderExportRow ToExportRow() => new(
-        AccountLabel, OrderSn, Buyer, Product, Total, Payment, Status, Note, Carrier, Tracking, SyncedAtDisplay);
+        AccountLabel, OrderSn, Buyer, Product, Total, Estimate, Payment, Status, Note, Carrier, Tracking, SyncedAtDisplay);
 
     /// <summary>
     /// Đường dẫn file PDF phiếu giao đã tải lúc xử lý đơn: <c>{SlipDownloadDir}\{sanitize(order_sn)}.pdf</c>.

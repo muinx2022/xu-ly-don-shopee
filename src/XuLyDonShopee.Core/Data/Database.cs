@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS orders (
     item_summary       TEXT,
     total_price        INTEGER,
     total_price_text   TEXT,
+    final_amount       INTEGER,
+    final_amount_text  TEXT,
     payment_method     TEXT,
     status             TEXT,
     status_description TEXT,
@@ -114,6 +116,11 @@ CREATE TABLE IF NOT EXISTS orders (
         // thêm cột mới bằng ALTER TABLE ADD COLUMN (không phá dữ liệu người dùng đang có).
         EnsureColumn(conn, "accounts", "ProxyKey", "TEXT");
         EnsureColumn(conn, "accounts", "PickupAddress", "TEXT");
+
+        // "Số tiền cuối cùng" lấy từ trang chi tiết đơn (cột "Ước tính" ở màn Đơn hàng) — thêm cho DB CŨ đã
+        // có bảng orders (kiểm cột tồn tại trước khi ALTER, không phá dữ liệu sẵn có).
+        EnsureColumn(conn, "orders", "final_amount", "INTEGER");
+        EnsureColumn(conn, "orders", "final_amount_text", "TEXT");
     }
 
     /// <summary>

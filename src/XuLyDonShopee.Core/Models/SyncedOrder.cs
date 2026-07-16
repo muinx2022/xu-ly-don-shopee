@@ -31,6 +31,15 @@ public sealed class SyncedOrder
     /// <summary>Tổng tiền đã parse về số nguyên VND (bỏ mọi ký tự không phải số); parse lỗi → null.</summary>
     public long? TotalPrice { get; set; }
 
+    /// <summary>
+    /// "Số tiền cuối cùng" đã parse về số nguyên VND, lấy từ TRANG CHI TIẾT đơn (card <c>[type='FinalAmount']</c>
+    /// → <c>.amount</c>). CHỈ lấy cho đơn KHÁC "Đã hủy". Null nếu chưa lấy / không đọc được.
+    /// </summary>
+    public long? FinalAmount { get; set; }
+
+    /// <summary>Nguyên văn "Số tiền cuối cùng" (vd "₫292.010") từ trang chi tiết. Có thể null.</summary>
+    public string? FinalAmountText { get; set; }
+
     /// <summary>Hình thức thanh toán (<c>.payment-method</c>). Có thể null.</summary>
     public string? PaymentMethod { get; set; }
 
