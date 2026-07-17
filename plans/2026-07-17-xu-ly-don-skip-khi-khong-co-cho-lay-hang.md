@@ -1,7 +1,7 @@
 # Plan: Xử lý đơn — bỏ qua (không vào Cài đặt vận chuyển) khi KHÔNG có đơn "Chờ lấy hàng"
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã push; chờ người dùng smoke)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu

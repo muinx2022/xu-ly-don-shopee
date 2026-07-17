@@ -194,7 +194,14 @@ public partial class AccountSession : ObservableObject, IAccountSession
     }
 
     /// <summary>
-    /// Xử lý đơn: trong phiên đang chạy, điều hướng KIỂU NGƯỜI tới "Cài Đặt Vận Chuyển" → tab "Địa Chỉ"
+    /// Xử lý đơn: trong phiên đang chạy. <b>ĐẦU LUỒNG — cửa skip:</b> đọc TƯƠI (reload trang chủ) số
+    /// "Chờ Lấy Hàng"; nếu ĐỌC ĐƯỢC số VÀ == 0 (<see cref="ShouldSkipProcessing"/>) thì <b>BỎ QUA toàn bộ</b>
+    /// (KHÔNG vào Cài đặt vận chuyển, không đặt/đặt-lại địa chỉ), đặt <c>ToShipCount=0</c> + StatusText/log
+    /// "Không có đơn Chờ lấy hàng — bỏ qua xử lý" và trả <c>true</c> ("xong-không-có-việc", KHÔNG phải lỗi).
+    /// ĐỌC KHÔNG được (null: chưa đăng nhập / lỗi) → KHÔNG skip, làm tiếp như cũ (tránh bỏ sót đơn thật).
+    /// Cửa skip này áp cho CẢ nút "Xử lý đơn" thủ công LẪN "Chạy tự động" (AutoRunService gọi cùng hàm này).
+    /// <para>
+    /// Khi CÓ đơn (skip không kích hoạt): điều hướng KIỂU NGƯỜI tới "Cài Đặt Vận Chuyển" → tab "Địa Chỉ"
     /// (bước 1), rồi <b>đặt địa chỉ lấy hàng</b> theo tỉnh mặc định của tài khoản
     /// (<see cref="AccountsViewModel.DefaultPickupAddress"/> nếu chưa chọn) (bước 2), rồi <b>xử lý LẦN LƯỢT
     /// MỌI đơn</b> cần "Chuẩn bị hàng" (bước 3): lặp <c>ProcessFirstOrderAsync</c> (arrange → CHỜ nút In phiếu
@@ -205,6 +212,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
     /// vòng dừng GIỮA CHỪNG vì 3 lỗi liên tiếp thì GIỮ NGUYÊN địa chỉ vì việc còn dở). Bật cờ
     /// <see cref="_navigating"/> bao trùm cả 4 bước để vòng <see cref="RunAsync"/> KHÔNG reload đọc đơn
     /// giữa chừng (phá thao tác). Graceful: phiên chưa chạy / bị hủy / lỗi → false, KHÔNG ném.
+    /// </para>
     /// </summary>
     public async Task<bool> ProcessOrdersAsync()
     {
@@ -230,10 +238,26 @@ public partial class AccountSession : ObservableObject, IAccountSession
         }
 
         _navigating = true;
-        StatusText = "Đang mở Cài đặt vận chuyển → Địa Chỉ (kiểu người)...";
         try
         {
+            // CỬA SKIP (đầu luồng, TRƯỚC khi vào Cài đặt vận chuyển): đọc TƯƠI số "Chờ Lấy Hàng" (reload
+            // trang chủ) để phản ánh đúng hiện trạng lúc bấm / lúc lô chạy — ToShipCount hiển thị có thể CŨ
+            // (bấm sau khi đơn đã hết, hoặc chưa tới nhịp đọc kế). CHỈ bỏ qua khi ĐỌC ĐƯỢC số VÀ == 0
+            // (ShouldSkipProcessing). Đọc KHÔNG được (null: chưa đăng nhập / lỗi) → KHÔNG skip, làm tiếp như
+            // cũ (tránh bỏ sót đơn thật). An toàn để await ở đây vì _navigating đang bật (loại trừ nhịp đọc
+            // đơn của RunAsync); finally cuối hàm vẫn nhả cờ.
+            StatusText = "Đang kiểm tra đơn Chờ lấy hàng...";
+            var toShip = await s.ReadToShipCountAsync(reload: true, tok).ConfigureAwait(false);
+            if (ShouldSkipProcessing(toShip))
+            {
+                ToShipCount = 0; // đồng bộ UI: đã xác nhận không còn đơn Chờ lấy hàng
+                StatusText = "Không có đơn Chờ lấy hàng — bỏ qua xử lý.";
+                _services.Log.Append(_logLabel, "Không có đơn Chờ lấy hàng — bỏ qua xử lý.");
+                return true; // "xong, không có việc" (KHÔNG phải lỗi) — KHÔNG vào Cài đặt vận chuyển.
+            }
+
             // Bước 1: mở Cài đặt vận chuyển → tab Địa Chỉ. Kết quả phân biệt bước hỏng để báo StatusText đúng.
+            StatusText = "Đang mở Cài đặt vận chuyển → Địa Chỉ (kiểu người)...";
             var nav = await s.OpenShippingAddressSettingsAsync(tok).ConfigureAwait(false);
             if (nav != ShippingNavResult.Ok)
             {
@@ -450,6 +474,15 @@ public partial class AccountSession : ObservableObject, IAccountSession
         int next = consecutiveFails + 1;
         return (next >= maxConsecutiveFails, next);  // lỗi → tăng chuỗi; đủ 3 liên tiếp thì dừng
     }
+
+    /// <summary>
+    /// Quyết định BỎ QUA xử lý đơn theo số "Chờ Lấy Hàng" ĐỌC ĐƯỢC (thuần, KHÔNG side-effect → test được).
+    /// Dùng ở ĐẦU <see cref="ProcessOrdersAsync"/>: CHỈ bỏ qua khi đọc ĐƯỢC số VÀ số == 0 (chắc chắn không
+    /// còn đơn "Chờ Lấy Hàng" → không cần vào Cài đặt vận chuyển). Đọc KHÔNG được
+    /// (<paramref name="toShipCount"/> == null: chưa đăng nhập / đọc lỗi) → KHÔNG bỏ qua (làm tiếp như cũ,
+    /// tránh bỏ sót đơn thật). Số &gt; 0 → KHÔNG bỏ qua (có đơn cần xử lý).
+    /// </summary>
+    public static bool ShouldSkipProcessing(int? toShipCount) => toShipCount is 0;
 
     /// <summary>Mô tả NGẮN bước lỗi của một đơn (dùng cho log "Bỏ qua đơn lỗi (...)" và câu dừng 3-liên-tiếp).</summary>
     private static string DescribeFailedStep(ArrangeShipmentResult r) => r switch

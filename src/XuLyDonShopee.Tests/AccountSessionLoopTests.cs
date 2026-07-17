@@ -71,4 +71,30 @@ public class AccountSessionLoopTests
         Assert.True(stop);
         Assert.Equal(2, consecutive);
     }
+
+    // ===== ShouldSkipProcessing: cửa skip đầu ProcessOrdersAsync (đọc-được-0 → skip; null/>0 → không) =====
+
+    [Fact]
+    public void ShouldSkip_DocDuoc0_Skip()
+    {
+        // Đọc ĐƯỢC số VÀ == 0 → bỏ qua (không vào Cài đặt vận chuyển).
+        Assert.True(AccountSession.ShouldSkipProcessing(0));
+    }
+
+    [Fact]
+    public void ShouldSkip_DocKhongDuoc_Null_KhongSkip()
+    {
+        // Đọc KHÔNG được (null: chưa đăng nhập / lỗi) → KHÔNG skip (làm tiếp như cũ, tránh bỏ sót đơn thật).
+        Assert.False(AccountSession.ShouldSkipProcessing(null));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(200)]
+    public void ShouldSkip_CoDon_KhongSkip(int count)
+    {
+        // Đọc được số > 0 → có đơn cần xử lý → KHÔNG skip.
+        Assert.False(AccountSession.ShouldSkipProcessing(count));
+    }
 }
