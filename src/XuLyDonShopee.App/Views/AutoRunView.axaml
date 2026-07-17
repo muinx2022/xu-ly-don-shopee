@@ -3,12 +3,45 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:XuLyDonShopee.App.ViewModels"
+             xmlns:services="using:XuLyDonShopee.App.Services"
              mc:Ignorable="d" d:DesignWidth="1084" d:DesignHeight="820"
              x:Class="XuLyDonShopee.App.Views.AutoRunView"
              x:CompileBindings="False"
              x:DataType="vm:AutoRunViewModel">
 
-    <ScrollViewer>
+    <!-- Style CỤC BỘ cho màn này: CHÉP nút "Xóa" tối của panel log từ AccountsView (KHÔNG nâng lên style chung
+         để không đụng màn khác). -->
+    <UserControl.Styles>
+        <!-- Nút "Xóa" trên nền đen của panel nhật ký (tối màu cho hợp tông). -->
+        <Style Selector="Button.logClear">
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Padding" Value="12,0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#D8D8D8" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.logClear /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#2A2A2A" />
+            <Setter Property="BorderBrush" Value="#3A3A3A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="5" />
+        </Style>
+        <Style Selector="Button.logClear:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#363636" />
+            <Setter Property="BorderBrush" Value="#4A4A4A" />
+        </Style>
+        <Style Selector="Button.logClear:pointerover">
+            <Setter Property="Foreground" Value="#FFFFFF" />
+        </Style>
+    </UserControl.Styles>
+
+    <!-- Bố cục 2 cột: cấu hình + điều khiển (TRÁI) | panel nhật ký TOÀN BỘ hoạt động autorun (PHẢI). -->
+    <Grid ColumnDefinitions="*,380">
+    <ScrollViewer Grid.Column="0">
         <StackPanel MaxWidth="760" HorizontalAlignment="Left" Margin="24,24,32,40">
 
             <TextBlock Text="Chạy tự động" FontSize="19" FontWeight="Bold" LetterSpacing="-0.3"
@@ -103,4 +136,62 @@
 
         </StackPanel>
     </ScrollViewer>
+
+        <!-- ===== Cột PHẢI: panel nhật ký đen — hiển thị TOÀN BỘ log (mọi shop + "Chạy tự động"), KHÔNG lọc. ===== -->
+        <Border Grid.Column="1"
+                Margin="8,24,16,16" CornerRadius="8" ClipToBounds="True"
+                Background="#0F1113" BorderBrush="#2A2A2A" BorderThickness="1">
+            <DockPanel Margin="12,8,12,8">
+
+                <!-- Header: tiêu đề + nút Xóa (chỉ xóa hiển thị, không xóa file). -->
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+                    <TextBlock Grid.Column="0" Text="Nhật ký hoạt động"
+                               FontSize="12" FontWeight="SemiBold"
+                               Foreground="#E8E8E8" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Classes="logClear"
+                            Content="Xóa" Command="{Binding ClearLogCommand}"
+                            ToolTip.Tip="Xóa các dòng đang hiển thị (không xóa file log trên đĩa)" />
+                </Grid>
+
+                <!-- Đường dẫn file log (mờ) để biết nhật ký được ghi ở đâu — 1 dòng. -->
+                <TextBlock DockPanel.Dock="Bottom" Text="{Binding LogPath}"
+                           FontSize="10" Foreground="#8A8A8A"
+                           TextTrimming="CharacterEllipsis" Margin="0,6,0,0" />
+
+                <!-- Danh sách dòng log: nền đen, chữ trắng, các dòng SÁT nhau; tự cuộn xuống cuối (code-behind). -->
+                <ListBox x:Name="AutoRunLogList"
+                         ItemsSource="{Binding LogEntries}"
+                         Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.Styles>
+                        <!-- Bỏ khoảng đệm/khoảng cách mặc định của ListBoxItem → dòng log sát nhau. -->
+                        <Style Selector="ListBoxItem">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="MinHeight" Value="0" />
+                        </Style>
+                        <Style Selector="ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="MinHeight" Value="0" />
+                            <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="#1AFFFFFF" />
+                        </Style>
+                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background" Value="#22FFFFFF" />
+                        </Style>
+                    </ListBox.Styles>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="services:LogEntry">
+                            <TextBlock Text="{Binding Display}"
+                                       FontFamily="Consolas, Menlo, monospace" FontSize="11"
+                                       Foreground="#EDEDED"
+                                       TextWrapping="Wrap" Margin="0" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+    </Grid>
 </UserControl>

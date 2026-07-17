@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -57,6 +58,14 @@ public partial class AutoRunViewModel : ViewModelBase
     /// <summary>Dòng trạng thái hiển thị (phase của service hoặc mặc định).</summary>
     public string StatusText => _auto.CurrentPhase ?? (_auto.IsRunning ? "Đang chạy..." : "Chưa chạy.");
 
+    /// <summary>TOÀN BỘ nhật ký hoạt động (mọi shop + dòng cấp batch "Chạy tự động") — KHÔNG lọc theo tài khoản
+    /// vì autorun chạy nhiều shop; hiển thị hết để theo dõi tiến trình. Bind trực tiếp collection CHUNG của
+    /// <see cref="ActivityLog"/>; code-behind cuộn xuống cuối khi có dòng mới.</summary>
+    public ObservableCollection<LogEntry> LogEntries => _services.Log.Entries;
+
+    /// <summary>Đường dẫn file log hôm nay (hiển thị mờ dưới panel để biết log được ghi ở đâu).</summary>
+    public string LogPath => _services.Log.CurrentLogPath;
+
     /// <summary>MainViewModel gọi khi chuyển sang màn này: nạp lại cấu hình từ DB + đồng bộ trạng thái runtime.</summary>
     public void Reload()
     {
@@ -76,6 +85,10 @@ public partial class AutoRunViewModel : ViewModelBase
         PersistConfig();
         SavedMessage = "Đã lưu cấu hình.";
     }
+
+    /// <summary>Nút "Xóa" trên panel nhật ký: xóa TOÀN BỘ dòng đang hiển thị (KHÔNG xóa file log trên đĩa).</summary>
+    [RelayCommand]
+    private void ClearLog() => _services.Log.Clear();
 
     /// <summary>Nút Bắt đầu/Dừng: đang chạy → Dừng (chờ thoát sạch); chưa chạy → lưu cấu hình rồi Bắt đầu.</summary>
     [RelayCommand]

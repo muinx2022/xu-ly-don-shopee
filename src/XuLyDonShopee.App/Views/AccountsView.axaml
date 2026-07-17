@@ -232,11 +232,11 @@
                 </DockPanel>
             </Border>
 
-            <!-- ===== Cột phải: chi tiết (hàng trên) + nhật ký của tài khoản đang chọn (hàng dưới) ===== -->
-            <Grid Grid.Column="1" RowDefinitions="*,220">
+            <!-- ===== Cột chi tiết: field DỒN về TRÁI (dọc 1 cột) + nhật ký của tài khoản đang chọn bên PHẢI ===== -->
+            <Grid Grid.Column="1" ColumnDefinitions="*,380">
 
-                <!-- Hàng trên: placeholder + form chi tiết (chồng nhau trong cùng ô). -->
-                <Grid Grid.Row="0">
+                <!-- Cột trái: placeholder + form chi tiết (chồng nhau trong cùng ô). -->
+                <Grid Grid.Column="0">
 
                     <!-- Placeholder khi chưa chọn -->
                     <TextBlock Text="Chọn một tài khoản hoặc bấm + Thêm tài khoản"
@@ -246,10 +246,11 @@
 
                     <!-- Khối chi tiết -->
                     <ScrollViewer IsVisible="{Binding IsEditing}">
-                        <!-- Form căng NGANG tới trần 1150 rồi CĂN GIỮA phần thừa (Stretch + MaxWidth): trên màn rộng
-                             hơn Full HD không còn mảng trống lớn bên phải; hẹp hơn thì co theo khung. Bề rộng chốt
-                             theo trần/khung (KHÔNG theo nội dung) → hàng nút và card KHÔNG xê dịch khi đổi tài khoản. -->
-                        <StackPanel MaxWidth="1150" HorizontalAlignment="Stretch"
+                        <!-- Field DỒN về TRÁI: neo trái + trần bề rộng 760 (đủ cho hàng 7 nút không bị cắt, 2 ô
+                             Tên/Mật khẩu không quá rộng); phần bên PHẢI của cột chi tiết để dành cho panel nhật ký.
+                             Bề rộng chốt theo trần/khung (KHÔNG theo nội dung) → hàng nút và card KHÔNG xê dịch khi
+                             đổi tài khoản. -->
+                        <StackPanel MaxWidth="760" HorizontalAlignment="Left"
                                     Margin="24,16,24,20">
 
                         <!-- Header hàng -->
@@ -334,13 +335,9 @@
                                    TextWrapping="Wrap" Margin="0,0,0,16"
                                    IsVisible="{Binding OrderStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-                        <!-- 4 card dàn LƯỚI 2 CỘT (lấp bề ngang, hết cảnh neo-trái để trống mảng phải). Cột TRÁI =
-                             THÔNG TIN ĐĂNG NHẬP + PROXY; cột PHẢI = COOKIE + ĐỊA CHỈ LẤY HÀNG; cột giữa 16 = khe.
-                             Mỗi cột là StackPanel Spacing=12 nên card cách đều theo dọc (bỏ Margin dưới từng card). -->
-                        <Grid ColumnDefinitions="*,16,*">
-
-                            <!-- ===== Cột trái ===== -->
-                            <StackPanel Grid.Column="0" Spacing="12">
+                        <!-- Card XẾP DỌC 1 CỘT (dồn field về TRÁI): Đăng nhập → Cookie → Proxy → Địa chỉ.
+                             Spacing=12 nên card cách đều theo dọc; phần bên PHẢI để dành cho panel nhật ký. -->
+                        <StackPanel Spacing="12">
 
                                 <!-- Card: Thông tin đăng nhập (Tên đăng nhập + Mật khẩu CÙNG 1 HÀNG). -->
                                 <Border Classes="card" Padding="20,16">
@@ -387,6 +384,20 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- Cookie đăng nhập: CHỈ hiện trạng thái đã có / chưa có (bỏ ô hiển thị chuỗi
+                                     cookie thô để form gọn, không bị scroll). -->
+                                <Border Classes="card" Padding="20,14">
+                                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                        <TextBlock Classes="section" Text="COOKIE ĐĂNG NHẬP" VerticalAlignment="Center" />
+                                        <TextBlock Text="✓ Đã có cookie đăng nhập" FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="#2E7D32" VerticalAlignment="Center"
+                                                   IsVisible="{Binding HasCookie}" />
+                                        <TextBlock Text="Chưa có — mở trang bán hàng để tự lưu"
+                                                   FontSize="13" Foreground="{StaticResource Text9A}"
+                                                   VerticalAlignment="Center" IsVisible="{Binding !HasCookie}" />
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- Card: Proxy riêng theo tài khoản (API key KiotProxy) -->
                                 <Border Classes="card" Padding="20,16">
                                     <StackPanel Spacing="12">
@@ -406,25 +417,6 @@
                                     </StackPanel>
                                 </Border>
 
-                            </StackPanel>
-
-                            <!-- ===== Cột phải ===== -->
-                            <StackPanel Grid.Column="2" Spacing="12">
-
-                                <!-- Cookie đăng nhập: CHỈ hiện trạng thái đã có / chưa có (bỏ ô hiển thị chuỗi
-                                     cookie thô để form gọn, không bị scroll). -->
-                                <Border Classes="card" Padding="20,14">
-                                    <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                                        <TextBlock Classes="section" Text="COOKIE ĐĂNG NHẬP" VerticalAlignment="Center" />
-                                        <TextBlock Text="✓ Đã có cookie đăng nhập" FontSize="13" FontWeight="SemiBold"
-                                                   Foreground="#2E7D32" VerticalAlignment="Center"
-                                                   IsVisible="{Binding HasCookie}" />
-                                        <TextBlock Text="Chưa có — mở trang bán hàng để tự lưu"
-                                                   FontSize="13" Foreground="{StaticResource Text9A}"
-                                                   VerticalAlignment="Center" IsVisible="{Binding !HasCookie}" />
-                                    </StackPanel>
-                                </Border>
-
                                 <!-- Card: Địa chỉ lấy hàng mặc định (dùng cho xử lý đơn sau này) -->
                                 <Border Classes="card" Padding="20,16">
                                     <StackPanel Spacing="12">
@@ -438,17 +430,15 @@
                                     </StackPanel>
                                 </Border>
 
-                            </StackPanel>
-
-                        </Grid>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
                     </Grid>
 
-                <!-- ===== Hàng dưới của cột chi tiết: nhật ký của TÀI KHOẢN đang chọn (nền đen) =====
-                     Margin cách viền phải/dưới cửa sổ (không đè sát mép) + bo góc thành "thẻ" log. -->
-                <Border Grid.Row="1"
-                        Margin="0,4,16,16" CornerRadius="8" ClipToBounds="True"
+                <!-- ===== Cột PHẢI của cột chi tiết: nhật ký của TÀI KHOẢN đang chọn (nền đen) =====
+                     Đứng dọc bên phải field; margin khe trái + cách viền trên/phải/dưới; bo góc thành "thẻ" log. -->
+                <Border Grid.Column="1"
+                        Margin="8,16,16,16" CornerRadius="8" ClipToBounds="True"
                         Background="#0F1113"
                         BorderBrush="#2A2A2A" BorderThickness="1">
             <DockPanel Margin="12,8,12,8">

@@ -1,7 +1,7 @@
 # Plan: Chi tiết TK — dồn field về trái, log sang phải; màn Chạy tự động — thêm panel log bên phải
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã push; chờ người dùng xem)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
