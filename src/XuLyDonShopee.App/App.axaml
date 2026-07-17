@@ -20,6 +20,7 @@
             <conv:DateTimeDisplayConverter x:Key="DateDisplay" />
             <conv:InitialConverter x:Key="Initial" />
             <conv:StatusPillConverter x:Key="StatusPill" />
+            <conv:OrderStatusPillConverter x:Key="OrderStatusPill" />
         </ResourceDictionary>
     </Application.Resources>
 

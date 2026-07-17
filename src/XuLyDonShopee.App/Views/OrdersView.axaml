@@ -107,7 +107,23 @@
                 <DataGridTextColumn Header="Tổng tiền" Binding="{Binding Total}" Width="105" />
                 <DataGridTextColumn Header="Ước tính" Binding="{Binding Estimate}" Width="105" />
                 <DataGridTextColumn Header="Thanh toán" Binding="{Binding Payment}" Width="1.2*" />
-                <DataGridTextColumn Header="Trạng thái" Binding="{Binding Status}" Width="120" />
+                <!-- Trạng thái: badge PILL nền nhạt + chữ đậm, màu theo từ khóa (OrderStatusPill).
+                     Ẩn pill khi trạng thái rỗng (đơn chưa có status) → ô trống sạch, không badge xám. -->
+                <DataGridTemplateColumn Header="Trạng thái" Width="140">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="10" Padding="10,3"
+                                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                                    BorderThickness="1"
+                                    Background="{Binding Status, Converter={StaticResource OrderStatusPill}, ConverterParameter=bg}"
+                                    BorderBrush="{Binding Status, Converter={StaticResource OrderStatusPill}, ConverterParameter=border}"
+                                    IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Text="{Binding Status}" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{Binding Status, Converter={StaticResource OrderStatusPill}, ConverterParameter=text}" />
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="Mô tả/Lý do hủy" Binding="{Binding Note}" Width="2*" />
                 <DataGridTextColumn Header="ĐVVC" Binding="{Binding Carrier}" Width="110" />
                 <DataGridTextColumn Header="Mã vận đơn" Binding="{Binding Tracking}" Width="150" />
