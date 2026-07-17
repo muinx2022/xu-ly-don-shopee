@@ -17,7 +17,7 @@ namespace XuLyDonShopee.App.Services;
 /// <see cref="ObservableObject"/> để trạng thái quan sát được.
 /// <para>
 /// Toàn bộ luồng <b>bê nguyên</b> từ <c>AccountsViewModel.OpenSellerAsync</c> cũ (chọn proxy → chuẩn bị
-/// trình duyệt → mở → tự đăng nhập kiểu người → vòng poll bắt cookie + theo dõi đơn 30' → bắt-cookie-chốt),
+/// trình duyệt → mở → tự đăng nhập kiểu người → vòng poll bắt cookie + theo dõi đơn theo chu kỳ cấu hình → bắt-cookie-chốt),
 /// CHỈ khác: <b>bỏ mọi hộp thoại modal</b> (15 phiên = 15 modal) → thay bằng trạng thái/log per-account; và
 /// việc cập nhật danh sách UI được <b>marshal về UI thread</b> ở ViewModel qua sự kiện (session chỉ ghi DB
 /// trên thread nền — SQLite an toàn — rồi phát <see cref="CookieSaved"/>).
@@ -286,6 +286,13 @@ public partial class AccountSession : ObservableObject, IAccountSession
             // LOG + BỎ QUA + chạy tiếp đơn kế (KHÔNG dừng cả vòng) — chỉ dừng khi LỖI 3 ĐƠN LIÊN TIẾP (chống
             // lặp vô hạn). Mọi bước ghi log qua ActivityLog (panel + file) để smoke live thấy rõ.
             var log = (Action<string>)(m => _services.Log.Append(_logLabel, m));
+
+            // Thư mục lưu phiếu: đọc MỘT LẦN từ Cài đặt (config hoặc mặc định cạnh app.db) — chụp vào biến,
+            // KHÔNG đọc lại giữa vòng/await. NGUỒN DUY NHẤT, khớp link "In phiếu" ở màn Đơn hàng. Tạo sẵn
+            // best-effort (SaveSlipAsync cũng tự tạo + cảnh báo nếu vẫn lỗi).
+            var invoiceDir = _services.Settings.GetInvoiceFolder();
+            try { Directory.CreateDirectory(invoiceDir); } catch { /* SaveSlipAsync sẽ thử lại + cảnh báo */ }
+
             const int MaxOrders = 200;              // chốt chặn an toàn (tránh lặp vô hạn nếu 1 đơn kẹt ở "Chuẩn bị hàng")
             var loopRng = new Random();
             int done = 0;                            // số đơn xử lý THÀNH CÔNG
@@ -296,7 +303,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
             while (done < MaxOrders)
             {
                 StatusText = $"Đang xử lý đơn thứ {done + failCount + 1}...";
-                last = await s.ProcessFirstOrderAsync(ShopeeShippingNav.SlipDownloadDir, log, tok).ConfigureAwait(false);
+                last = await s.ProcessFirstOrderAsync(invoiceDir, log, tok).ConfigureAwait(false);
 
                 // Quyết định vòng lặp (hàm thuần, test được): Ok → reset chuỗi lỗi; NoOrder → dừng (hết đơn);
                 // lỗi khác → tăng chuỗi lỗi, dừng khi đạt 3 liên tiếp.
@@ -469,7 +476,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
     /// <summary>
     /// Kiểm tra đơn NGAY (thủ công): trong phiên đang chạy, về trang chủ Seller (Goto như người gõ URL —
     /// KHÔNG click máy) rồi đọc lại số "Chờ Lấy Hàng" ngay, cập nhật <see cref="ToShipCount"/> — không đợi
-    /// chu kỳ theo dõi 30'. Bật cờ <see cref="_navigating"/> để vòng <see cref="RunAsync"/> KHÔNG reload đọc
+    /// chu kỳ theo dõi (cấu hình). Bật cờ <see cref="_navigating"/> để vòng <see cref="RunAsync"/> KHÔNG reload đọc
     /// đơn giữa chừng và để loại trừ với <see cref="ProcessOrdersAsync"/> (hai thao tác không chạy chồng nhau
     /// trên cùng trang). Graceful: phiên chưa chạy / đang bận / bị hủy / không đọc được → false, KHÔNG ném.
     /// KHÔNG đổi <see cref="ToShipCount"/> khi không đọc được (giữ số cũ).
@@ -536,7 +543,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
     /// Sync Đơn hàng: trong phiên đang chạy, vào Quản lý đơn hàng → tab "Tất cả", duyệt MỌI trang danh sách
     /// (Core best-effort — không ném trừ hủy) thu thập thông tin đơn rồi <b>UPSERT về DB</b> (bảng orders,
     /// theo khóa <c>(account_id, order_sn)</c>). Bật cờ <see cref="_navigating"/> suốt lượt để loại trừ với
-    /// Xử lý đơn / Kiểm tra / nhịp theo dõi 30' (không hai luồng chuột trên cùng trang). Ghi log tiến trình
+    /// Xử lý đơn / Kiểm tra / nhịp theo dõi (cấu hình) (không hai luồng chuột trên cùng trang). Ghi log tiến trình
     /// từng trang + tổng kết (thêm mới / cập nhật). Graceful: phiên chưa chạy / đang bận / bị hủy / lỗi →
     /// false + StatusText/log, KHÔNG ném. finally reset <see cref="_navigating"/>.
     /// </summary>
@@ -674,6 +681,11 @@ public partial class AccountSession : ObservableObject, IAccountSession
             // lần mở lại). Tín hiệu kết thúc CHÍNH vẫn là "không còn cửa sổ nào".
             var hardCap = DateTime.UtcNow.AddHours(12);
 
+            // Chu kỳ theo dõi đơn (phút): đọc MỘT LẦN từ Cài đặt khi phiên bắt đầu (chụp vào biến — KHÔNG đọc
+            // lại giữa await). Đổi trong Cài đặt CHỈ áp cho phiên MỞ SAU khi lưu (phiên đang chạy giữ số cũ,
+            // kể cả khi relaunch đổi proxy — đơn giản, chấp nhận). Đã kẹp [1,1440] trong config.
+            var orderIntervalMin = _services.Settings.GetOrderIntervalMinutes();
+
             // ===== VÒNG RELAUNCH NGOÀI =====
             // Mỗi vòng = một lần mở Brave (với _currentProxy hiện tại) + vòng poll bên trong. Khi proxy chết,
             // watchdog đặt relaunchForProxy=true → thoát poll → dispose Brave → quay lại mở LẠI với proxy mới.
@@ -732,7 +744,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
 
                     // 5) Tự bắt & lưu cookie trong lúc cửa sổ mở; kết thúc khi người dùng đóng hết cửa sổ.
                     SetStatus(SessionState.Running,
-                        "Đã mở trình duyệt. Đăng nhập xong app sẽ tự theo dõi đơn mỗi 30'; đóng cửa sổ để dừng.");
+                        $"Đã mở trình duyệt. Đăng nhập xong app sẽ tự theo dõi đơn mỗi {orderIntervalMin}'; đóng cửa sổ để dừng.");
                     if (firstOpen)
                     {
                         ToShipCount = null; // reset CHỈ ở lần mở đầu; relaunch giữ số cũ (nhịp đọc đơn tự làm mới).
@@ -740,7 +752,6 @@ public partial class AccountSession : ObservableObject, IAccountSession
 
                     string? lastSaved = null;
                     const int PollMs = 1000;
-                    const int OrderIntervalMin = 30;
                     const int OrderRetrySec = 30;
                     var nextOrderCheck = DateTime.UtcNow;
                     bool firstOrderCheck = true;
@@ -808,7 +819,7 @@ public partial class AccountSession : ObservableObject, IAccountSession
                                 // Đọc được số lần đầu SAU login → trang chủ đã đăng nhập & ổn định, _navigating
                                 // vừa nhả false (finally trên) → BẬT sẵn sàng: nút Sync/Kiểm tra được điều hướng.
                                 _readyForActions = true;
-                                nextOrderCheck = DateTime.UtcNow.AddMinutes(OrderIntervalMin); // đã đăng nhập → 30'
+                                nextOrderCheck = DateTime.UtcNow.AddMinutes(orderIntervalMin); // đã đăng nhập → chu kỳ cấu hình
                             }
                             else
                             {

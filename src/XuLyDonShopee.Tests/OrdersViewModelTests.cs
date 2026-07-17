@@ -191,16 +191,39 @@ public class OrdersViewModelTests
         Assert.Equal("B1", Assert.Single(vm.Rows).OrderSn);
     }
 
-    // ===== Link "In phiếu": SlipPath suy từ order_sn phải KHỚP nơi tải phiếu (cùng hằng thư mục + SanitizeFileName) =====
+    // ===== Link "In phiếu": SlipPath suy từ order_sn phải KHỚP nơi tải phiếu (CÙNG thư mục truyền vào + SanitizeFileName) =====
     [Theory]
     [InlineData("260715ABC", "260715ABC.pdf")]      // mã đơn sạch → giữ nguyên
     [InlineData("SN/1:2*3", "SN_1_2_3.pdf")]        // ký tự lạ (/ : *) → '_' đúng như SanitizeFileName lúc lưu
     [InlineData("  A B  ", "A_B.pdf")]              // khoảng trắng đầu/cuối cắt, giữa → '_'
     public void SlipPath_SuyTuOrderSn_KhopThuMucVaSanitize(string orderSn, string expectedFileName)
     {
-        var row = new OrderRowViewModel(new OrderRow { OrderSn = orderSn }, "lbl");
-        var expected = System.IO.Path.Combine(ShopeeShippingNav.SlipDownloadDir, expectedFileName);
+        // Thư mục hóa đơn giờ TRUYỀN VÀO (OrdersViewModel đọc từ Cài đặt) — SlipPath dùng đúng thư mục đó + Sanitize.
+        var invoiceDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "xlds-slip-test");
+        var row = new OrderRowViewModel(new OrderRow { OrderSn = orderSn }, "lbl", invoiceDir);
+        var expected = System.IO.Path.Combine(invoiceDir, expectedFileName);
         Assert.Equal(expected, row.SlipPath);
+    }
+
+    // ===== Nhất quán 3 nơi: thư mục hóa đơn ở Cài đặt → SlipPath của dòng phải trỏ đúng thư mục đó =====
+    [Fact]
+    public void SlipPath_DungThuMucHoaDonTuCaiDat()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        var accId = SeedAccount(services, "a@mail.com");
+        services.Orders.UpsertMany(accId, new[]
+        {
+            new SyncedOrder { OrderSn = "SN-INV-1" }
+        }, DateTime.UtcNow);
+
+        // Đặt thư mục hóa đơn tùy chỉnh ở Cài đặt → SlipPath của dòng phải trỏ vào đúng thư mục đó (cùng nguồn xử lý đơn).
+        var custom = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "xlds-custom-invoices");
+        services.Settings.SetInvoiceFolder(custom);
+
+        var vm = new OrdersViewModel(services);
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal(System.IO.Path.Combine(custom, "SN-INV-1.pdf"), row.SlipPath);
     }
 
     [Fact]
@@ -208,8 +231,9 @@ public class OrdersViewModelTests
     {
         // order_sn duy nhất → file phiếu chắc chắn KHÔNG tồn tại → không Process.Start (không mở app PDF trong test).
         var orderSn = "__no_slip_" + Guid.NewGuid().ToString("N");
+        var invoiceDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "xlds-slip-test");
         string? msg = null;
-        var row = new OrderRowViewModel(new OrderRow { OrderSn = orderSn }, "lbl", m => msg = m);
+        var row = new OrderRowViewModel(new OrderRow { OrderSn = orderSn }, "lbl", invoiceDir, m => msg = m);
 
         row.OpenSlipCommand.Execute(null); // reference compile-time: chứng minh [RelayCommand] sinh OpenSlipCommand
 

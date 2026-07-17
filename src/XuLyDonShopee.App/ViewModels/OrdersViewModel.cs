@@ -113,12 +113,17 @@ public partial class OrdersViewModel : ViewModelBase
 
         var labels = _services.Accounts.GetAll().ToDictionary(a => a.Id, a => a.Email);
 
+        // Thư mục hóa đơn: đọc MỘT LẦN khi nạp danh sách (config hoặc mặc định cạnh app.db) rồi truyền vào mỗi
+        // dòng → link "In phiếu" (SlipPath) trỏ CÙNG chỗ nơi xử lý đơn LƯU phiếu. Đổi thư mục ở Cài đặt → bấm
+        // "Làm mới" để các dòng đón đường dẫn mới.
+        var invoiceDir = _services.Settings.GetInvoiceFolder();
+
         Rows.Clear();
         foreach (var row in _services.Orders.Query(accountId, status, search))
         {
             var label = labels.TryGetValue(row.AccountId, out var email) ? email : $"(TK #{row.AccountId})";
             // notify: link "In phiếu" của dòng báo trạng thái (thiếu file / lỗi mở) ra StatusMessage của màn.
-            Rows.Add(new OrderRowViewModel(row, label, msg => StatusMessage = msg));
+            Rows.Add(new OrderRowViewModel(row, label, invoiceDir, msg => StatusMessage = msg));
         }
 
         OnPropertyChanged(nameof(TotalText));

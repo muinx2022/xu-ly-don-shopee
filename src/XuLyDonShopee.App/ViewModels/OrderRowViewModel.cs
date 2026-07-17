@@ -22,13 +22,18 @@ public sealed partial class OrderRowViewModel
 
     private readonly OrderRow _row;
 
+    /// <summary>Thư mục lưu phiếu (đọc từ Cài đặt qua <c>SettingsRepository.GetInvoiceFolder()</c>) — OrdersViewModel
+    /// đọc MỘT LẦN khi nạp danh sách rồi truyền vào mỗi dòng để <see cref="SlipPath"/> khớp nơi TẢI phiếu.</summary>
+    private readonly string _invoiceDir;
+
     /// <summary>Callback báo trạng thái ra màn (OrdersViewModel gán vào StatusMessage). Null → im lặng.</summary>
     private readonly Action<string>? _notify;
 
-    public OrderRowViewModel(OrderRow row, string accountLabel, Action<string>? notify = null)
+    public OrderRowViewModel(OrderRow row, string accountLabel, string invoiceDir, Action<string>? notify = null)
     {
         _row = row;
         AccountLabel = accountLabel;
+        _invoiceDir = invoiceDir;
         _notify = notify;
     }
 
@@ -69,13 +74,14 @@ public sealed partial class OrderRowViewModel
         AccountLabel, OrderSn, Buyer, Product, Total, Estimate, Payment, Status, Note, Carrier, Tracking, SyncedAtDisplay);
 
     /// <summary>
-    /// Đường dẫn file PDF phiếu giao đã tải lúc xử lý đơn: <c>{SlipDownloadDir}\{sanitize(order_sn)}.pdf</c>.
-    /// KHỚP TUYỆT ĐỐI cách <c>SaveSlipAsync</c> đặt tên (cùng hằng <see cref="ShopeeShippingNav.SlipDownloadDir"/>
-    /// + cùng <see cref="ShopeeShippingNav.SanitizeFileName"/>). Chỉ SUY RA đường dẫn — KHÔNG kiểm tồn tại lúc
-    /// render (tránh IO mỗi dòng); chỉ kiểm khi bấm mở trong <see cref="OpenSlip"/>.
+    /// Đường dẫn file PDF phiếu giao đã tải lúc xử lý đơn: <c>{thư mục hóa đơn cấu hình}\{sanitize(order_sn)}.pdf</c>.
+    /// KHỚP TUYỆT ĐỐI cách <c>SaveSlipAsync</c> đặt tên: CÙNG thư mục (đọc từ Cài đặt qua
+    /// <c>SettingsRepository.GetInvoiceFolder()</c>, truyền vào <c>_invoiceDir</c> — cùng nguồn với nơi xử lý đơn
+    /// LƯU phiếu) + cùng <see cref="ShopeeShippingNav.SanitizeFileName"/>. Chỉ SUY RA đường dẫn — KHÔNG kiểm tồn
+    /// tại lúc render (tránh IO mỗi dòng); chỉ kiểm khi bấm mở trong <see cref="OpenSlip"/>.
     /// </summary>
     public string SlipPath => Path.Combine(
-        ShopeeShippingNav.SlipDownloadDir, ShopeeShippingNav.SanitizeFileName(OrderSn) + ".pdf");
+        _invoiceDir, ShopeeShippingNav.SanitizeFileName(OrderSn) + ".pdf");
 
     /// <summary>
     /// Link "In phiếu": mở file PDF phiếu đã tải bằng ứng dụng mặc định của Windows (ShellExecute — KHÔNG chạy

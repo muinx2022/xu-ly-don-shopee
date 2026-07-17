@@ -23,6 +23,12 @@ public class SettingsRepository
     /// <summary>Key: có tự Xử lý đơn (arrange + in phiếu) trong mỗi lượt "Chạy tự động" hay không.</summary>
     public const string AutoRunDoProcess = "autorun_do_process";
 
+    /// <summary>Key: thư mục lưu phiếu/hóa đơn người dùng chọn (rỗng/thiếu → mặc định cạnh app.db).</summary>
+    private const string InvoiceFolderKey = "invoice_folder";
+
+    /// <summary>Key: chu kỳ theo dõi đơn (phút) giữa các lần tự đọc "Chờ Lấy Hàng" (thiếu/lạ → 30, kẹp [1,1440]).</summary>
+    private const string OrderIntervalMinutesKey = "order_interval_minutes";
+
     private readonly Database _db;
 
     public SettingsRepository(Database db) => _db = db;
@@ -49,6 +55,35 @@ public class SettingsRepository
         Set(AutoRunGapMinutes, AutoRunSettings.IntToStorage(s.GapMinutes));
         Set(AutoRunDoSync, AutoRunSettings.BoolToStorage(s.DoSync));
         Set(AutoRunDoProcess, AutoRunSettings.BoolToStorage(s.DoProcess));
+    }
+
+    /// <summary>
+    /// Thư mục lưu phiếu/hóa đơn THỰC DÙNG: giá trị người dùng đã chọn (đã trim) nếu có, ngược lại mặc định
+    /// cạnh app.db (<see cref="Database.DefaultInvoiceDir"/>). NGUỒN DUY NHẤT cho cả 3 nơi — xử lý đơn (lưu
+    /// phiếu), link "In phiếu" ở màn Đơn hàng (mở phiếu) và ô hiển thị ở Cài đặt — để không nơi nào lệch chỗ.
+    /// </summary>
+    public string GetInvoiceFolder()
+    {
+        var folder = AppGeneralSettings.Parse(Get(InvoiceFolderKey), null).InvoiceFolder; // trim; rỗng nếu chưa đặt
+        return string.IsNullOrEmpty(folder) ? _db.DefaultInvoiceDir() : folder;
+    }
+
+    /// <summary>Lưu thư mục lưu hóa đơn người dùng chọn (rỗng → xóa cấu hình ⇒ quay về mặc định app).</summary>
+    public void SetInvoiceFolder(string? path)
+    {
+        var folder = AppGeneralSettings.Parse(path, null).InvoiceFolder; // trim
+        Set(InvoiceFolderKey, string.IsNullOrEmpty(folder) ? null : folder);
+    }
+
+    /// <summary>Chu kỳ theo dõi đơn (phút): config đã kẹp [1,1440]; thiếu/lạ → 30.</summary>
+    public int GetOrderIntervalMinutes()
+        => AppGeneralSettings.Parse(null, Get(OrderIntervalMinutesKey)).OrderIntervalMinutes;
+
+    /// <summary>Lưu chu kỳ theo dõi đơn (phút) — chuẩn hóa (kẹp [1,1440]) trước khi ghi.</summary>
+    public void SetOrderIntervalMinutes(int minutes)
+    {
+        var norm = AppGeneralSettings.Normalize(null, minutes).OrderIntervalMinutes;
+        Set(OrderIntervalMinutesKey, AppGeneralSettings.IntToStorage(norm));
     }
 
     /// <summary>Lấy giá trị theo key, trả null nếu chưa có.</summary>
