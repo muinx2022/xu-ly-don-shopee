@@ -1,7 +1,11 @@
 # Plan: Cài đặt — thực hiện THẬT (Thư mục lưu hóa đơn + Chu kỳ theo dõi đơn); bỏ Xử lý đơn hàng & Giao diện
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng smoke đổi thư mục + chu kỳ)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus (worktree, đọc plan qua `git show main:`) làm đủ A/B/C/D: `Database.DefaultInvoiceDir()` (cạnh app.db) + `AppGeneralSettings` record + `SettingsRepository` 2 khóa (`GetInvoiceFolder`/`GetOrderIntervalMinutes`...); NGUỒN thư mục nhất quán 3 nơi qua `GetInvoiceFolder()` — AccountSession.ProcessOrdersAsync lưu, OrdersViewModel→OrderRowViewModel link In phiếu, mặc định; chu kỳ theo dõi đọc `GetOrderIntervalMinutes()` một lần đầu phiên (thay const 30); SettingsView bỏ 2 section "Xử lý đơn hàng"+"Giao diện", còn Tự động hóa với folder picker thật + NumericUpDown chu kỳ; 12 test AppGeneralSettings + cập nhật OrdersViewModelTests. Fable đọc xác nhận 3 nguồn nhất quán + chu kỳ; build 0 warning + 555/555 (tổng sau merge); panel đối kháng 0 finding thật (2 phát hiện bị bác). Ghi nhận (plan chấp nhận): đổi thư mục rồi, đơn cũ có phiếu ở thư mục cũ → link In phiếu (đường dẫn mới) báo "chưa có file". Smoke: CHỜ NGƯỜI DÙNG.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
 
 ## 1. Bối cảnh & mục tiêu
