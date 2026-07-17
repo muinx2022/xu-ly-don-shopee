@@ -1,7 +1,11 @@
 # Plan: Màn Đơn hàng — double-click một ô để copy text ô đó vào clipboard
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng smoke)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus (cây chính) dùng `DataGrid.CellPointerPressed` (xác minh API qua metadata DLL Avalonia 11.2.8) + `ClickCount==2` + chuột trái; `CellTextExtractor.ExtractCellText` (Button→null bỏ ô "Phiếu"; TextBlock đầu tiên DFS visual+logical) + 9 test; copy `TopLevel.Clipboard` null-safe không async void; toast bằng Popup khai báo neo cell + DispatcherTimer 1.2s reset. Fable đọc handler + build/test 564/564. Điểm khác plan hợp lý: Popup thay Flyout (tránh chrome theme), chốt chuột trái, nhận-Button thay so chuỗi. Smoke: CHỜ NGƯỜI DÙNG.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu
