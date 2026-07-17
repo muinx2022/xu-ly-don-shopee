@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using XuLyDonShopee.App.Services;
 using XuLyDonShopee.App.ViewModels;
 using XuLyDonShopee.Core.Models;
@@ -240,5 +241,82 @@ public class OrdersViewModelTests
         Assert.NotNull(msg);
         Assert.Contains("Chưa có file phiếu", msg!);
         Assert.Contains(orderSn, msg!);
+    }
+
+    // ===== C: CanPrintSlip — ẩn nút "In phiếu" khi trạng thái CHỨA "hủy" (chuẩn hóa hoa/thường + khoảng trắng) =====
+    [Theory]
+    [InlineData("Đã hủy", false)]
+    [InlineData("Đã hủy một phần", false)]
+    [InlineData("ĐÃ HỦY", false)]                 // hoa/thường không ảnh hưởng
+    [InlineData("Chờ lấy hàng", true)]
+    [InlineData("Hoàn thành", true)]
+    [InlineData("Đang giao", true)]
+    [InlineData("", true)]                         // rỗng → không phải hủy → vẫn hiện (không ẩn nhầm)
+    public void CanPrintSlip_AnKhiTrangThaiChuaHuy(string status, bool expected)
+    {
+        var row = new OrderRowViewModel(new OrderRow { OrderSn = "SN", Status = status }, "lbl", "dir");
+        Assert.Equal(expected, row.CanPrintSlip);
+    }
+
+    // ===== B: IsPendingPickup — nhận diện đơn "Chờ lấy hàng" để in hàng loạt (chuẩn hóa CHỨA) =====
+    [Theory]
+    [InlineData("Chờ lấy hàng", true)]
+    [InlineData("chờ lấy hàng", true)]            // hoa/thường
+    [InlineData("  Chờ   lấy   hàng ", true)]     // khoảng trắng thừa → chuẩn hóa vẫn khớp
+    [InlineData("Chờ xác nhận", false)]           // "chờ" nhưng KHÔNG phải "chờ lấy hàng"
+    [InlineData("Đã hủy", false)]
+    [InlineData("Hoàn thành", false)]
+    [InlineData("", false)]
+    public void IsPendingPickup_ChiKhopChoLayHang(string status, bool expected)
+    {
+        var row = new OrderRowViewModel(new OrderRow { OrderSn = "SN", Status = status }, "lbl", "dir");
+        Assert.Equal(expected, row.IsPendingPickup);
+    }
+
+    // ===== B: "In nhiều đơn" — CHỈ tính đơn "Chờ lấy hàng" đang hiển thị; thiếu file phiếu → đếm "thiếu file", KHÔNG in =====
+    [Fact]
+    public async Task PrintPendingSlips_ChiDonChoLayHang_ThieuFile_BaoThieu_KhongNem()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        var accId = SeedAccount(services, "a@mail.com");
+        services.Orders.UpsertMany(accId, new[]
+        {
+            new SyncedOrder { OrderSn = "P1", Status = "Chờ lấy hàng" },
+            new SyncedOrder { OrderSn = "P2", Status = "Chờ lấy hàng" },
+            new SyncedOrder { OrderSn = "C1", Status = "Đã hủy" },       // KHÔNG phải Chờ lấy hàng → bỏ qua
+            new SyncedOrder { OrderSn = "D1", Status = "Hoàn thành" },   // KHÔNG phải Chờ lấy hàng → bỏ qua
+        }, DateTime.UtcNow);
+
+        // Thư mục hóa đơn RIÊNG + không tồn tại (unique) → file phiếu chắc chắn KHÔNG có → KHÔNG in gì (no Process.Start).
+        var emptyDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "xlds-print-" + Guid.NewGuid().ToString("N"));
+        services.Settings.SetInvoiceFolder(emptyDir);
+
+        var vm = new OrdersViewModel(services);
+        Assert.Equal(4, vm.Rows.Count);
+
+        await vm.PrintPendingSlipsCommand.ExecuteAsync(null);
+
+        // 2 đơn Chờ lấy hàng, cả 2 thiếu file → in 0, thiếu 2; C1/D1 KHÔNG được tính.
+        Assert.Equal("Đã gửi in 0 phiếu Chờ lấy hàng (thiếu file: 2).", vm.StatusMessage);
+    }
+
+    // ===== B: "In nhiều đơn" khi danh sách KHÔNG có đơn Chờ lấy hàng → báo rõ, KHÔNG in =====
+    [Fact]
+    public async Task PrintPendingSlips_KhongCoDonChoLayHang_BaoKhongCo()
+    {
+        using var temp = new TempDatabase();
+        var services = new AppServices(temp.Path);
+        var accId = SeedAccount(services, "a@mail.com");
+        services.Orders.UpsertMany(accId, new[]
+        {
+            new SyncedOrder { OrderSn = "C1", Status = "Đã hủy" },
+            new SyncedOrder { OrderSn = "D1", Status = "Hoàn thành" },
+        }, DateTime.UtcNow);
+
+        var vm = new OrdersViewModel(services);
+        await vm.PrintPendingSlipsCommand.ExecuteAsync(null);
+
+        Assert.Equal("Không có đơn Chờ lấy hàng nào trong danh sách để in.", vm.StatusMessage);
     }
 }

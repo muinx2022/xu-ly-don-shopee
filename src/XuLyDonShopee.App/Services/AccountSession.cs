@@ -618,6 +618,10 @@ public partial class AccountSession : ObservableObject, IAccountSession
             // Lưu về DB (thread nền — SQLite an toàn): upsert theo (account_id, order_sn).
             var (inserted, updated) = _services.Orders.UpsertMany(_accountId, result.Orders, DateTime.UtcNow);
 
+            // Vừa ghi đơn vào DB → phát tín hiệu để màn "Đơn hàng" đang mở TỰ nạp lại (OrdersViewModel nghe
+            // rồi marshal về UI thread). CHỈ thêm 1 lời gọi này, KHÔNG đụng luồng xử lý đơn / cửa-skip.
+            _services.RaiseOrdersChanged();
+
             var summary = $"Sync xong: {result.Orders.Count} đơn / {result.Pages} trang — thêm {inserted} mới, cập nhật {updated}."
                 + (result.ReachedPageCap ? " (chạm chốt chặn 20 trang)" : string.Empty);
             StatusText = summary;

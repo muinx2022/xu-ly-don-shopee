@@ -42,8 +42,8 @@
                        Foreground="{StaticResource TextMuted}" Margin="0,2,0,0" />
         </StackPanel>
 
-        <!-- Thanh lọc: tài khoản · trạng thái · tìm kiếm · Làm mới · Xuất CSV -->
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="230,200,*,Auto,Auto" Margin="0,0,0,12">
+        <!-- Thanh lọc: tài khoản · trạng thái · tìm kiếm · Làm mới · In nhiều đơn · Xuất CSV -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="230,200,*,Auto,Auto,Auto" Margin="0,0,0,12">
             <!-- Lọc theo tài khoản: GÕ ĐỂ TÌM tên shop (≈100 shop, cuộn ComboBox tay rất cực).
                  AutoCompleteBox lọc gợi ý theo Email (ValueMemberBinding=Label; FilterMode=Contains — khớp
                  CHỨA, không phân biệt hoa/thường: gõ "alina" ra "alina99.store"). Chọn 1 gợi ý → SelectedAccount
@@ -80,7 +80,10 @@
 
             <Button Grid.Column="3" Classes="secondary" Height="38" Content="Làm mới"
                     Margin="8,0,0,0" Command="{Binding RefreshCommand}" />
-            <Button Grid.Column="4" Classes="accent" Height="38" Content="Xuất CSV"
+            <Button Grid.Column="4" Classes="secondary" Height="38" Content="In nhiều đơn"
+                    Margin="8,0,0,0" Command="{Binding PrintPendingSlipsCommand}"
+                    ToolTip.Tip="In toàn bộ phiếu (PDF) của đơn Chờ lấy hàng trong danh sách đang hiển thị" />
+            <Button Grid.Column="5" Classes="accent" Height="38" Content="Xuất CSV"
                     Margin="8,0,0,0" Command="{Binding ExportCsvCommand}" />
         </Grid>
 
@@ -108,7 +111,9 @@
                 <DataGridTemplateColumn Header="Phiếu" Width="90">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
+                            <!-- Ẩn cho đơn "Đã hủy" (CanPrintSlip=false): đơn hủy chưa qua xử lý nên không có phiếu. -->
                             <Button Classes="linky" Command="{Binding OpenSlipCommand}"
+                                    IsVisible="{Binding CanPrintSlip}"
                                     ToolTip.Tip="Mở file PDF phiếu giao đã tải của đơn này">
                                 <TextBlock Text="In phiếu" />
                             </Button>

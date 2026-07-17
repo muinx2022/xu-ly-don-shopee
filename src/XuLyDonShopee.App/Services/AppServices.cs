@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using XuLyDonShopee.Core.Data;
 
@@ -27,6 +28,17 @@ public class AppServices
     /// <summary>Bộ "Chạy tự động theo lô" (vòng chạy nền lặp liên tục). App shutdown gọi
     /// <see cref="AutoRunService.StopAsync"/> để dừng vòng trước khi kill các phiên.</summary>
     public AutoRunService AutoRun { get; }
+
+    /// <summary>
+    /// Phát khi kho đơn (bảng <c>orders</c>) vừa được ghi thêm/cập nhật — phiên sync gọi
+    /// <see cref="RaiseOrdersChanged"/> ngay sau <c>OrdersRepository.UpsertMany</c> để màn "Đơn hàng" đang mở
+    /// tự nạp lại. CỐ Ý có thể bắn từ THREAD NỀN của phiên sync → người nghe (OrdersViewModel) PHẢI marshal về
+    /// UI thread trước khi đụng ObservableCollection.
+    /// </summary>
+    public event Action? OrdersChanged;
+
+    /// <summary>Phiên gọi sau khi UpsertMany đơn về DB THÀNH CÔNG để phát <see cref="OrdersChanged"/>.</summary>
+    public void RaiseOrdersChanged() => OrdersChanged?.Invoke();
 
     public AppServices(string? dbPath = null)
     {

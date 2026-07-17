@@ -1,7 +1,7 @@
 # Plan: Màn Đơn hàng — (A) tự refresh sau sync, (B) nút "In nhiều đơn" phiếu Chờ lấy hàng, (C) ẩn "In phiếu" cho đơn Đã hủy
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** chờ (làm SAU khi `2026-07-17-don-hang-loc-shop-go-de-tim.md` merge — cùng đụng OrdersView/OrdersViewModel)
+- **Trạng thái:** hoàn thành (đã push; chờ người dùng smoke)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu

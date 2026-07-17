@@ -22,6 +22,9 @@ public partial class OrdersViewModel : ViewModelBase
     /// <summary>Sentinel cho mục "tất cả" ở ComboBox trạng thái.</summary>
     public const string AllStatusesLabel = "Tất cả trạng thái";
 
+    /// <summary>Chờ nhỏ giữa hai lệnh in liên tiếp (tránh dội máy in / mở ồ ạt cửa sổ app PDF).</summary>
+    private const int PrintDispatchDelayMs = 700;
+
     private readonly AppServices _services;
 
     /// <summary>Chặn requery khi đang dựng lại danh sách lựa chọn trong <see cref="Reload"/>.</summary>
@@ -30,7 +33,28 @@ public partial class OrdersViewModel : ViewModelBase
     public OrdersViewModel(AppServices services)
     {
         _services = services;
+        // Sync xong (phiên ghi đơn vào DB rồi phát OrdersChanged, có thể từ thread nền) → TỰ nạp lại màn.
+        // VM sống suốt vòng đời app (MainViewModel giữ) cùng AppServices → không cần gỡ đăng ký.
+        _services.OrdersChanged += OnOrdersChanged;
         Reload();
+    }
+
+    /// <summary>
+    /// Phiên sync vừa ghi đơn vào DB (phát <see cref="AppServices.OrdersChanged"/> — CÓ THỂ từ thread nền của
+    /// phiên) → MARSHAL về UI thread rồi <see cref="Reload"/> để màn đang mở tự đón đơn mới, GIỮ NGUYÊN bộ lọc
+    /// tài khoản/trạng thái/tìm kiếm hiện tại. ObservableCollection <see cref="Rows"/> chỉ được đụng trên UI thread.
+    /// </summary>
+    private void OnOrdersChanged()
+    {
+        var ui = Avalonia.Threading.Dispatcher.UIThread;
+        if (ui.CheckAccess())
+        {
+            Reload();
+        }
+        else
+        {
+            ui.Post(Reload);
+        }
     }
 
     /// <summary>Lựa chọn của ComboBox tài khoản: "Tất cả" + từng tài khoản.</summary>
@@ -205,6 +229,55 @@ public partial class OrdersViewModel : ViewModelBase
         }
 
         var message = $"Đã xuất {count} đơn → {saved}";
+        StatusMessage = message;
+        _services.Log.Append("Đơn hàng", message);
+    }
+
+    /// <summary>
+    /// Nút "In nhiều đơn": duyệt các dòng ĐANG hiển thị (đã theo bộ lọc tài khoản/trạng thái/tìm kiếm), lấy
+    /// đơn trạng thái "Chờ lấy hàng" (<see cref="OrderRowViewModel.IsPendingPickup"/>) và gửi file PDF phiếu
+    /// (<see cref="OrderRowViewModel.SlipPath"/>) tới máy in mặc định qua <see cref="PdfPrinter.TryPrint"/>.
+    /// Thiếu file (đơn chưa xử lý / phiếu chưa tải) → đếm "thiếu file", KHÔNG in. Có chờ nhỏ giữa các lệnh in
+    /// để tránh dội máy in. Báo tổng kết ra <see cref="StatusMessage"/> (đã in / thiếu file / lỗi in nếu có).
+    /// </summary>
+    [RelayCommand]
+    private async Task PrintPendingSlipsAsync()
+    {
+        // Chụp danh sách đơn Chờ lấy hàng đang hiển thị NGAY lúc bấm (Rows có thể đổi khi sync tự refresh).
+        var pending = Rows.Where(r => r.IsPendingPickup).ToList();
+        if (pending.Count == 0)
+        {
+            StatusMessage = "Không có đơn Chờ lấy hàng nào trong danh sách để in.";
+            return;
+        }
+
+        int printed = 0, missing = 0, failed = 0;
+        foreach (var row in pending)
+        {
+            if (!File.Exists(row.SlipPath))
+            {
+                missing++; // đơn Chờ lấy hàng CHƯA có file phiếu (chưa xử lý / chưa tải) → bỏ qua, đếm thiếu
+                continue;
+            }
+
+            if (PdfPrinter.TryPrint(row.SlipPath))
+            {
+                printed++;
+            }
+            else
+            {
+                failed++; // có file nhưng in lỗi (không có app PDF mặc định hỗ trợ verb print, file khóa...)
+            }
+
+            // Chờ nhỏ giữa các lệnh in — tránh dội máy in / mở ồ ạt cửa sổ app PDF.
+            await Task.Delay(PrintDispatchDelayMs);
+        }
+
+        var message = $"Đã gửi in {printed} phiếu Chờ lấy hàng (thiếu file: {missing}).";
+        if (failed > 0)
+        {
+            message += $" Lỗi in: {failed}.";
+        }
         StatusMessage = message;
         _services.Log.Append("Đơn hàng", message);
     }

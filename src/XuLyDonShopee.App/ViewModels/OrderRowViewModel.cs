@@ -56,6 +56,19 @@ public sealed partial class OrderRowViewModel
     public string Payment => _row.PaymentMethod ?? string.Empty;
     public string Status => _row.Status ?? string.Empty;
 
+    /// <summary>
+    /// Có hiện nút "In phiếu" cho dòng này không: FALSE khi trạng thái CHỨA "hủy" (đơn "Đã hủy" / "Đã hủy
+    /// một phần" chưa qua xử lý nên KHÔNG có file phiếu giao → ẩn nút). Chuẩn hóa (bỏ hoa/thường + gộp khoảng
+    /// trắng) rồi so "chứa" — bền với biến thể chữ, giống <c>OrderStatusPillConverter</c>.
+    /// </summary>
+    public bool CanPrintSlip => !NormalizeStatus(Status).Contains("hủy");
+
+    /// <summary>
+    /// Đơn "Chờ lấy hàng" (đã arrange, chờ bưu cục lấy) — dùng để LỌC in hàng loạt phiếu giao ở màn Đơn hàng.
+    /// Nhận diện bằng chuẩn hóa CHỨA "chờ lấy hàng" (bền với biến thể chữ/khoảng trắng).
+    /// </summary>
+    public bool IsPendingPickup => NormalizeStatus(Status).Contains("chờ lấy hàng");
+
     /// <summary>Cột "Mô tả/Lý do hủy": ưu tiên lý do hủy (nếu có) rồi tới mô tả trạng thái.</summary>
     public string Note => !string.IsNullOrWhiteSpace(_row.CancelReason)
         ? _row.CancelReason!
@@ -107,6 +120,12 @@ public sealed partial class OrderRowViewModel
             _notify?.Invoke($"Không mở được file phiếu {SlipPath}: {ex.Message}");
         }
     }
+
+    /// <summary>Chuẩn hóa trạng thái để so khớp từ khóa: bỏ hoa/thường + gộp khoảng trắng thừa (giống
+    /// <c>OrderStatusPillConverter.Classify</c>) → so "chứa" bền với biến thể chữ/khoảng trắng.</summary>
+    private static string NormalizeStatus(string? status)
+        => string.Join(' ', (status ?? string.Empty).ToLowerInvariant()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     /// <summary>Dựng chuỗi cột "Sản phẩm": tên SP đầu, thêm "(+n)" (n = số SP còn lại) khi đơn nhiều SP.</summary>
     public static string BuildProduct(string? summary, int itemCount)
