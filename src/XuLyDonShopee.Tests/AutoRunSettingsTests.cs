@@ -45,7 +45,7 @@ public class AutoRunSettingsTests
     {
         var s = AutoRunSettings.Parse(null, null, null, null);
 
-        Assert.Equal(AutoRunSettings.DefaultBatchSize, s.BatchSize);   // 3
+        Assert.Equal(AutoRunSettings.DefaultBatchSize, s.BatchSize);   // 10
         Assert.Equal(AutoRunSettings.DefaultGapMinutes, s.GapMinutes); // 15
         Assert.False(s.DoSync);
         Assert.False(s.DoProcess);
@@ -68,7 +68,7 @@ public class AutoRunSettingsTests
     {
         var s = AutoRunSettings.Parse("abc", "", "1", "0");
 
-        Assert.Equal(AutoRunSettings.DefaultBatchSize, s.BatchSize);   // "abc" → mặc định 3
+        Assert.Equal(AutoRunSettings.DefaultBatchSize, s.BatchSize);   // "abc" → mặc định 10
         Assert.Equal(AutoRunSettings.DefaultGapMinutes, s.GapMinutes); // "" → mặc định 15
         Assert.True(s.DoSync);   // "1" → true
         Assert.False(s.DoProcess); // "0" → false

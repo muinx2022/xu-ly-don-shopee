@@ -13,8 +13,8 @@ namespace XuLyDonShopee.Core.Models;
 /// </summary>
 public sealed record AutoRunSettings(int BatchSize, int GapMinutes, bool DoSync, bool DoProcess)
 {
-    /// <summary>Số tài khoản mỗi lô mặc định.</summary>
-    public const int DefaultBatchSize = 3;
+    /// <summary>Số tài khoản mỗi lô mặc định (yêu cầu người dùng 17/7).</summary>
+    public const int DefaultBatchSize = 10;
 
     /// <summary>Số tài khoản mỗi lô tối thiểu (không cho ≤ 0 kẻo lô rỗng / chia vô hạn).</summary>
     public const int MinBatchSize = 1;
@@ -32,7 +32,7 @@ public sealed record AutoRunSettings(int BatchSize, int GapMinutes, bool DoSync,
     /// <see cref="int.MaxValue"/> ms → ném ArgumentOutOfRange bị catch-all nuốt làm vòng tự kết thúc âm thầm.</summary>
     public const int MaxGapMinutes = 1440;
 
-    /// <summary>Cấu hình mặc định (N=3, M=15, tắt Sync, tắt Xử lý đơn) — Xử lý đơn GHI lên Shopee nên mặc định TẮT.</summary>
+    /// <summary>Cấu hình mặc định (N=10, M=15, tắt Sync, tắt Xử lý đơn) — Xử lý đơn GHI lên Shopee nên mặc định TẮT.</summary>
     public static AutoRunSettings Default => new(DefaultBatchSize, DefaultGapMinutes, false, false);
 
     /// <summary>

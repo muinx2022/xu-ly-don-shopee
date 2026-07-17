@@ -445,10 +445,12 @@
                 </ScrollViewer>
                     </Grid>
 
-                <!-- ===== Hàng dưới của cột chi tiết: nhật ký của TÀI KHOẢN đang chọn (nền đen) ===== -->
+                <!-- ===== Hàng dưới của cột chi tiết: nhật ký của TÀI KHOẢN đang chọn (nền đen) =====
+                     Margin cách viền phải/dưới cửa sổ (không đè sát mép) + bo góc thành "thẻ" log. -->
                 <Border Grid.Row="1"
+                        Margin="0,4,16,16" CornerRadius="8" ClipToBounds="True"
                         Background="#0F1113"
-                        BorderBrush="#2A2A2A" BorderThickness="0,1,0,0">
+                        BorderBrush="#2A2A2A" BorderThickness="1">
             <DockPanel Margin="12,8,12,8">
 
                 <!-- Header: tiêu đề + nút Xóa (chỉ xóa hiển thị, không xóa file). -->
