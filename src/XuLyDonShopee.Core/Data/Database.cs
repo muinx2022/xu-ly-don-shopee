@@ -42,6 +42,14 @@ public class Database
         return System.IO.Path.Combine(appData, "XuLyDonShopee", "app.db");
     }
 
+    /// <summary>
+    /// Thư mục MẶC ĐỊNH lưu phiếu/hóa đơn khi người dùng chưa chọn ở Cài đặt:
+    /// <c>{thư mục chứa app.db}\Phieu-giao-hang</c> (nằm cạnh dữ liệu app). Là nguồn mặc định của
+    /// <see cref="SettingsRepository.GetInvoiceFolder"/>.
+    /// </summary>
+    public string DefaultInvoiceDir()
+        => System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Path) ?? ".", "Phieu-giao-hang");
+
     /// <summary>Mở một kết nối mới (đã Open). Caller chịu trách nhiệm Dispose.</summary>
     public SqliteConnection OpenConnection()
     {

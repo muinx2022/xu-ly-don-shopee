@@ -246,9 +246,11 @@ public static class ShopeeShippingNav
     }
 
     /// <summary>
-    /// Thư mục lưu file phiếu giao PDF khi xử lý đơn (tên file = <see cref="SanitizeFileName"/>(order_sn) + ".pdf").
-    /// Hằng dùng CHUNG cho cả nơi TẢI phiếu (<c>ProcessFirstOrderAsync</c>/<c>SaveSlipAsync</c>) và nơi MỞ phiếu ở
-    /// màn "Đơn hàng" (<c>OrderRowViewModel.SlipPath</c>) — hai nơi phải trỏ CÙNG chỗ. Đổi thư mục thì đổi ở đây.
+    /// [LỖI THỜI — KHÔNG còn là nguồn thư mục] Đường dẫn phiếu cũ. Thư mục lưu phiếu giờ đọc từ Cài đặt
+    /// (<c>SettingsRepository.GetInvoiceFolder()</c>, mặc định <c>{thư mục app.db}\Phieu-giao-hang</c>) và
+    /// được TRUYỀN VÀO cả nơi TẢI phiếu (<c>ProcessFirstOrderAsync</c>/<c>SaveSlipAsync</c>) lẫn nơi MỞ phiếu
+    /// (<c>OrderRowViewModel.SlipPath</c>). Hằng này GIỮ lại làm mốc lịch sử, KHÔNG dùng làm nguồn nữa.
+    /// Tên file vẫn = <see cref="SanitizeFileName"/>(order_sn) + ".pdf".
     /// </summary>
     public const string SlipDownloadDir = @"D:\Phieu-giao-hang";
 

@@ -36,6 +36,47 @@ public static class DialogService
         await dialog.ShowDialog<bool>(MainWindow);
     }
 
+    /// <summary>
+    /// Mở hộp thoại chọn THƯ MỤC (StorageProvider của cửa sổ chính) cho người dùng chọn nơi lưu hóa đơn.
+    /// Trả về đường dẫn thư mục đã chọn, hoặc null nếu chưa gán cửa sổ chính / người dùng bấm Hủy.
+    /// <paramref name="startFolder"/> (nếu có &amp; mở được) dùng làm thư mục mở đầu; lỗi/không tồn tại → mở mặc định.
+    /// </summary>
+    public static async Task<string?> PickInvoiceFolderAsync(string? startFolder = null)
+    {
+        if (MainWindow is null)
+        {
+            return null;
+        }
+
+        IStorageFolder? start = null;
+        if (!string.IsNullOrWhiteSpace(startFolder))
+        {
+            try
+            {
+                start = await MainWindow.StorageProvider.TryGetFolderFromPathAsync(startFolder);
+            }
+            catch
+            {
+                start = null; // thư mục không tồn tại / lỗi → mở mặc định
+            }
+        }
+
+        var folders = await MainWindow.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Chọn thư mục lưu hóa đơn",
+            AllowMultiple = false,
+            SuggestedStartLocation = start
+        });
+
+        var folder = folders.Count > 0 ? folders[0] : null;
+        if (folder is null)
+        {
+            return null; // người dùng bấm Hủy
+        }
+
+        return folder.TryGetLocalPath() ?? folder.Name;
+    }
+
     /// <summary>Hộp thoại dán danh sách proxy. Trả về văn bản đã dán, hoặc null nếu Hủy.</summary>
     public static async Task<string?> ImportProxyAsync()
     {
