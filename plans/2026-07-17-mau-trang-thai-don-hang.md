@@ -1,7 +1,11 @@
 # Plan: Màu sắc phân biệt trạng thái ở màn Đơn hàng
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng xem màu)
+
+## Báo cáo nghiệm thu (Fable)
+
+Opus (worktree) thêm `OrderStatusPillConverter` (text status → brush theo keyword, vai trò bg/border/text) đăng ký ở App.axaml; cột "Trạng thái" OrdersView thành pill (nền nhạt + viền + chữ đậm SemiBold), ẩn khi status rỗng; KHÔNG đụng sync/lưu/OrderRowViewModel. Map: đỏ (hủy/trả hàng/hoàn tiền/không thành công/thất bại), xanh lá (hoàn thành/đã giao/thành công/đã nhận), xanh dương (đang giao/vận chuyển), amber (chờ/chuẩn bị/xác nhận), xám (không rõ). Fable phát hiện "không thành công" dính keyword "thành công" → Opus vá thêm "không thành công"/"thất bại" vào nhánh Cancelled (kiểm trước Done) + thêm OrderStatusPillConverterTests (15 test khóa logic). Build 0 warning + 533/533. Cột rộng 120→140. Smoke thị giác: CHỜ NGƯỜI DÙNG.
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`, worktree)
 
 ## 1. Bối cảnh & mục tiêu
