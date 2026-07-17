@@ -1,7 +1,7 @@
 # Plan: Màn Đơn hàng — ô lọc theo shop cho GÕ ĐỂ TÌM (searchable) thay ComboBox thường
 
 - **Ngày:** 2026-07-17
-- **Trạng thái:** đang làm
+- **Trạng thái:** hoàn thành (đã merge; chờ người dùng smoke gõ tìm shop)
 - **Người lập:** Fable · **Người thực thi:** Opus (`opus-executor`)
 
 ## 1. Bối cảnh & mục tiêu

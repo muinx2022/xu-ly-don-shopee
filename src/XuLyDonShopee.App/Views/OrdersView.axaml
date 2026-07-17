@@ -44,15 +44,26 @@
 
         <!-- Thanh lọc: tài khoản · trạng thái · tìm kiếm · Làm mới · Xuất CSV -->
         <Grid DockPanel.Dock="Top" ColumnDefinitions="230,200,*,Auto,Auto" Margin="0,0,0,12">
-            <ComboBox Grid.Column="0" Classes="field" Height="38" HorizontalAlignment="Stretch"
-                      ItemsSource="{Binding AccountOptions}"
-                      SelectedItem="{Binding SelectedAccount}">
-                <ComboBox.ItemTemplate>
+            <!-- Lọc theo tài khoản: GÕ ĐỂ TÌM tên shop (≈100 shop, cuộn ComboBox tay rất cực).
+                 AutoCompleteBox lọc gợi ý theo Email (ValueMemberBinding=Label; FilterMode=Contains — khớp
+                 CHỨA, không phân biệt hoa/thường: gõ "alina" ra "alina99.store"). Chọn 1 gợi ý → SelectedAccount
+                 (2 chiều) → Apply lọc như ComboBox cũ. MinimumPrefixLength=1: xóa TRẮNG ô → control tự đặt
+                 SelectedItem=null → SelectedAccount=null → Apply coi accountId null = "tất cả tài khoản" (không
+                 phải bảng trống). Gõ dở chưa chọn (≥1 ký tự) KHÔNG đổi SelectedItem → giữ nguyên lọc, bảng
+                 không nháy. ItemTemplate hiển thị Label cho từng dòng gợi ý. -->
+            <AutoCompleteBox Grid.Column="0" Classes="field" Height="38" HorizontalAlignment="Stretch"
+                             ItemsSource="{Binding AccountOptions}"
+                             SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                             ValueMemberBinding="{Binding Label}"
+                             FilterMode="Contains"
+                             MinimumPrefixLength="1"
+                             Watermark="Gõ tên shop để tìm… (trống = tất cả)">
+                <AutoCompleteBox.ItemTemplate>
                     <DataTemplate>
                         <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
                     </DataTemplate>
-                </ComboBox.ItemTemplate>
-            </ComboBox>
+                </AutoCompleteBox.ItemTemplate>
+            </AutoCompleteBox>
 
             <ComboBox Grid.Column="1" Classes="field" Height="38" HorizontalAlignment="Stretch"
                       Margin="8,0,0,0"
